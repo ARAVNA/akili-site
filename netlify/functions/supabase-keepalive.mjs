@@ -11,21 +11,18 @@ export default async () => {
   }
   const headers = { apikey: key, Authorization: `Bearer ${key}` };
 
-  // Trouve une table exposée par l'API, puis lit une ligne : cela génère une vraie requête en base.
-  let table = null;
-  try {
-    const spec = await (await fetch(`${url}/rest/v1/`, { headers })).json();
-    table = Object.keys(spec.paths || {})
-      .map((p) => p.slice(1))
-      .find((p) => p && !p.startsWith("rpc/"));
-  } catch (e) {
-    console.warn("Lecture du schéma impossible :", e.message);
+  // Lit une ligne d'une table connue : cela génère une vraie requête en base.
+  // (La liste des tables n'est pas accessible avec la clé publique.)
+  // Avec la sécurité RLS, la réponse peut être vide : la requête compte quand même.
+  const tables = ["organizations", "profiles", "clients"];
+  let table = null, status = 0;
+  for (const t of tables) {
+    const res = await fetch(`${url}/rest/v1/${t}?select=*&limit=1`, { headers });
+    status = res.status;
+    if (res.ok) { table = t; break; }
   }
-
-  const target = table ? `${url}/rest/v1/${table}?select=*&limit=1` : `${url}/rest/v1/`;
-  const res = await fetch(target, { headers });
   const auth = await fetch(`${url}/auth/v1/health`, { headers });
-  const msg = `Supabase réveillé : table=${table ?? "(aucune)"} rest=${res.status} auth=${auth.status}`;
+  const msg = `Supabase réveillé : table=${table ?? "(aucune)"} rest=${status} auth=${auth.status}`;
   console.log(msg);
   return new Response(msg);
 };
