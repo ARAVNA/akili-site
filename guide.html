@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Guide Akili ERP | Akili ERP</title>
+  <meta name="description" content="Guide complet d'utilisation d'Akili ERP — le logiciel de gestion pour PME africaines. Comptabilité OHADA, RH, stocks, facturation et IA.">
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #00d9ff;
+      --bg-dark: #0b0f1a;
+      --bg-card: #121d38;
+      --text: #e0e0e0;
+      --text-secondary: #b0c0d0;
+      --text-muted: #607080;
+      --border: rgba(0,217,255,0.1);
+      --border-hover: rgba(0,217,255,0.3);
+      --shadow: 0 4px 20px rgba(0,217,255,0.15);
+      --gradient: linear-gradient(135deg, #00d9ff, #0066ff);
+      --gold: #F59E0B;
+      --gold-dark: #92400E;
+      --gradient-gold: linear-gradient(135deg, #F59E0B, #92400E);
+    }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { background:var(--bg-dark); color:var(--text); font-family:'Inter',sans-serif; line-height:1.7; }
+    ::-webkit-scrollbar { width:8px; }
+    ::-webkit-scrollbar-track { background:var(--bg-dark); }
+    ::-webkit-scrollbar-thumb { background:var(--gold); border-radius:4px; }
+
+    @keyframes fadeInUp { from { opacity:0; transform:translateY(30px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes float { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-8px); } }
+
+    /* HEADER */
+    header { background:rgba(11,15,26,0.97); padding:16px 8%; position:fixed; top:0; left:0; right:0; z-index:1000; backdrop-filter:blur(20px); border-bottom:1px solid var(--border); }
+    nav { display:flex; justify-content:space-between; align-items:center; max-width:1200px; margin:0 auto; }
+    .logo { font-size:22px; font-weight:800; color:var(--primary); text-decoration:none; display:flex; align-items:center; gap:8px; }
+    .nav-right { display:flex; align-items:center; gap:15px; }
+    .lang-btn { background:none; border:1px solid var(--border-hover); border-radius:20px; padding:6px 14px; color:var(--text-secondary); font-size:13px; cursor:pointer; font-family:'Inter',sans-serif; transition:all 0.3s; }
+    .lang-btn:hover, .lang-btn.active { background:var(--gradient-gold); color:#000; border-color:transparent; font-weight:700; }
+    .btn-try { background:var(--gradient-gold); color:#000; padding:10px 22px; border-radius:50px; font-weight:700; font-size:14px; text-decoration:none; transition:all 0.3s; }
+    .btn-try:hover { transform:translateY(-2px); box-shadow:0 8px 25px rgba(245,158,11,0.4); }
+
+    /* HERO */
+    .guide-hero { padding:140px 8% 80px; text-align:center; position:relative; overflow:hidden; }
+    .guide-hero::before { content:''; position:absolute; top:0; left:0; right:0; bottom:0; background:radial-gradient(ellipse at 50% 30%, rgba(245,158,11,0.06) 0%, transparent 60%); }
+    .guide-hero-content { position:relative; z-index:1; max-width:800px; margin:0 auto; animation:fadeInUp 0.8s ease; }
+    .guide-badge { display:inline-flex; align-items:center; gap:8px; background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.3); padding:8px 20px; border-radius:50px; font-size:13px; color:var(--gold); margin-bottom:25px; }
+    .guide-hero h1 { font-size:clamp(32px,5vw,58px); font-weight:800; margin-bottom:20px; line-height:1.15; }
+    .guide-hero h1 span { background:var(--gradient-gold); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
+    .guide-hero p { font-size:18px; color:var(--text-secondary); max-width:600px; margin:0 auto 35px; }
+    .guide-hero-btns { display:flex; gap:15px; justify-content:center; flex-wrap:wrap; }
+    .btn-primary { display:inline-flex; align-items:center; gap:8px; padding:14px 30px; background:var(--gradient-gold); color:#000; text-decoration:none; border-radius:50px; font-weight:700; font-size:15px; transition:all 0.3s; }
+    .btn-primary:hover { transform:translateY(-3px); box-shadow:0 10px 30px rgba(245,158,11,0.4); }
+    .btn-secondary { display:inline-flex; align-items:center; gap:8px; padding:14px 30px; background:transparent; color:var(--primary); text-decoration:none; border-radius:50px; font-weight:700; font-size:15px; border:2px solid var(--primary); transition:all 0.3s; }
+    .btn-secondary:hover { background:var(--primary); color:#000; }
+
+    /* SOMMAIRE */
+    .toc { background:var(--bg-card); border:1px solid rgba(245,158,11,0.2); border-radius:20px; padding:35px; max-width:900px; margin:0 auto 60px; }
+    .toc h3 { color:var(--gold); font-size:16px; text-transform:uppercase; letter-spacing:2px; margin-bottom:20px; display:flex; align-items:center; gap:10px; }
+    .toc-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(200px,1fr)); gap:10px; }
+    .toc-item { display:flex; align-items:center; gap:10px; padding:10px 14px; background:rgba(245,158,11,0.05); border:1px solid rgba(245,158,11,0.1); border-radius:10px; text-decoration:none; color:var(--text-secondary); font-size:14px; transition:all 0.3s; }
+    .toc-item:hover { background:rgba(245,158,11,0.1); color:var(--gold); border-color:rgba(245,158,11,0.3); transform:translateX(4px); }
+    .toc-item i { color:var(--gold); font-size:14px; flex-shrink:0; }
+    .toc-num { background:var(--gradient-gold); color:#000; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; flex-shrink:0; }
+
+    /* CONTENU */
+    .guide-content { max-width:900px; margin:0 auto; padding:0 8% 80px; }
+    .guide-section { margin-bottom:70px; scroll-margin-top:90px; }
+    .section-tag { display:inline-flex; align-items:center; gap:8px; background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.25); padding:6px 16px; border-radius:20px; font-size:12px; color:var(--gold); text-transform:uppercase; letter-spacing:2px; margin-bottom:15px; }
+    .guide-section h2 { font-size:clamp(24px,3vw,34px); font-weight:800; color:var(--text); margin-bottom:15px; line-height:1.3; }
+    .guide-section h2 span { color:var(--gold); }
+    .lang-block { margin-bottom:30px; }
+    .lang-label { display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:700; padding:4px 12px; border-radius:20px; margin-bottom:10px; text-transform:uppercase; letter-spacing:1px; }
+    .lang-fr { background:rgba(0,85,164,0.15); color:#4A90D9; border:1px solid rgba(0,85,164,0.3); }
+    .lang-en { background:rgba(178,34,34,0.1); color:#E07070; border:1px solid rgba(178,34,34,0.3); }
+    .lang-block p { font-size:16px; color:var(--text-secondary); line-height:1.8; margin-bottom:12px; }
+    .lang-block p strong { color:var(--text); }
+
+    /* STEPS */
+    .steps { display:flex; flex-direction:column; gap:20px; margin:25px 0; }
+    .step { display:flex; gap:20px; align-items:flex-start; background:var(--bg-card); border:1px solid var(--border); border-radius:16px; padding:22px 25px; transition:all 0.3s; }
+    .step:hover { border-color:rgba(245,158,11,0.3); transform:translateX(5px); }
+    .step-num { width:36px; height:36px; border-radius:50%; background:var(--gradient-gold); color:#000; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:15px; flex-shrink:0; }
+    .step-content h4 { color:var(--text); font-size:16px; margin-bottom:5px; font-weight:700; }
+    .step-content p { color:var(--text-secondary); font-size:14px; line-height:1.7; margin:0; }
+    .step-content .step-en { color:var(--text-muted); font-size:13px; font-style:italic; margin-top:5px; }
+
+    /* MODULES GRID */
+    .modules-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px,1fr)); gap:20px; margin:25px 0; }
+    .module-card { background:var(--bg-card); border:1px solid var(--border); border-radius:16px; padding:25px; transition:all 0.4s; position:relative; overflow:hidden; }
+    .module-card::before { content:''; position:absolute; top:0; left:0; width:100%; height:3px; background:var(--gradient-gold); transform:scaleX(0); transition:transform 0.4s; }
+    .module-card:hover::before { transform:scaleX(1); }
+    .module-card:hover { border-color:rgba(245,158,11,0.3); transform:translateY(-5px); box-shadow:0 10px 30px rgba(245,158,11,0.1); }
+    .module-icon { width:50px; height:50px; border-radius:14px; background:rgba(245,158,11,0.1); display:flex; align-items:center; justify-content:center; margin-bottom:15px; }
+    .module-icon i { font-size:22px; color:var(--gold); }
+    .module-card h4 { color:var(--text); font-size:16px; font-weight:700; margin-bottom:5px; }
+    .module-card .fr { color:var(--text-secondary); font-size:13px; line-height:1.6; margin-bottom:6px; }
+    .module-card .en { color:var(--text-muted); font-size:12px; font-style:italic; line-height:1.6; }
+
+    /* PLANS */
+    .plans-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:20px; margin:25px 0; }
+    .plan-card { background:var(--bg-card); border:1px solid var(--border); border-radius:16px; padding:28px; text-align:center; transition:all 0.3s; }
+    .plan-card.featured { border-color:rgba(245,158,11,0.5); background:linear-gradient(135deg,rgba(245,158,11,0.05),transparent); }
+    .plan-card:hover { transform:translateY(-5px); border-color:rgba(245,158,11,0.3); }
+    .plan-name { font-size:13px; text-transform:uppercase; letter-spacing:2px; color:var(--text-muted); margin-bottom:8px; font-weight:700; }
+    .plan-price { font-size:28px; font-weight:800; color:var(--gold); margin-bottom:5px; }
+    .plan-price span { font-size:14px; color:var(--text-muted); font-weight:400; }
+    .plan-desc-fr { font-size:13px; color:var(--text-secondary); margin-bottom:4px; }
+    .plan-desc-en { font-size:12px; color:var(--text-muted); font-style:italic; }
+    .plan-cta { display:block; margin-top:20px; padding:12px; border-radius:30px; font-weight:700; font-size:14px; text-decoration:none; background:var(--gradient-gold); color:#000; transition:all 0.3s; }
+    .plan-cta:hover { transform:translateY(-2px); box-shadow:0 8px 20px rgba(245,158,11,0.3); }
+
+    /* TIP BOX */
+    .tip { background:rgba(16,185,129,0.06); border:1px solid rgba(16,185,129,0.25); border-radius:14px; padding:20px 24px; margin:20px 0; display:flex; gap:15px; align-items:flex-start; }
+    .tip i { color:#10B981; font-size:18px; flex-shrink:0; margin-top:2px; }
+    .tip p { font-size:14px; color:var(--text-secondary); margin:0; line-height:1.7; }
+    .tip p strong { color:#10B981; }
+    .warn { background:rgba(245,158,11,0.06); border:1px solid rgba(245,158,11,0.25); border-radius:14px; padding:20px 24px; margin:20px 0; display:flex; gap:15px; align-items:flex-start; }
+    .warn i { color:var(--gold); font-size:18px; flex-shrink:0; margin-top:2px; }
+    .warn p { font-size:14px; color:var(--text-secondary); margin:0; line-height:1.7; }
+
+    /* CTA FINAL */
+    .guide-cta { background:linear-gradient(135deg, rgba(245,158,11,0.08), rgba(146,64,14,0.05)); border:1px solid rgba(245,158,11,0.2); border-radius:24px; padding:60px 40px; text-align:center; margin:60px 0; }
+    .guide-cta h2 { font-size:clamp(24px,3vw,36px); font-weight:800; color:var(--text); margin-bottom:10px; }
+    .guide-cta h3 { font-size:18px; font-weight:600; color:var(--text-muted); margin-bottom:25px; font-style:italic; }
+    .guide-cta p { font-size:16px; color:var(--text-secondary); margin-bottom:8px; }
+    .guide-cta .cta-btns { display:flex; gap:15px; justify-content:center; flex-wrap:wrap; margin-top:30px; }
+
+    /* FOOTER */
+    .guide-footer { background:#050812; padding:40px 8%; border-top:1px solid var(--border); text-align:center; }
+    .guide-footer p { color:var(--text-muted); font-size:14px; margin-bottom:10px; }
+    .guide-footer a { color:var(--gold); text-decoration:none; }
+    .guide-footer a:hover { text-decoration:underline; }
+
+    @media(max-width:768px) {
+      .plans-grid { grid-template-columns:1fr; }
+      .toc-grid { grid-template-columns:1fr; }
+      .guide-hero-btns { flex-direction:column; align-items:center; }
+      .nav-right .btn-try { display:none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <nav>
+    <a href="index.html" class="logo" target="_self">
+      <i class="fa-solid fa-brain"></i> AKILI ERP
+    </a>
+    <div class="nav-right">
+      <button class="lang-btn active" id="btnFr" onclick="setLang('fr')">🇫🇷 FR</button>
+      <button class="lang-btn" id="btnEn" onclick="setLang('en')">🇬🇧 EN</button>
+      <a href="https://akilierp.africavit.com" class="btn-try">
+        <i class="fa-solid fa-rocket"></i> Essayer / Try Akili ERP
+      </a>
+    </div>
+  </nav>
+</header>
+
+<!-- HERO -->
+<section class="guide-hero">
+  <div class="guide-hero-content">
+    <div class="guide-badge"><i class="fa-solid fa-book-open"></i> <span class="t" data-fr="Guide Complet" data-en="Complete Guide">Guide Complet</span></div>
+    <h1><span>Akili ERP</span><br><span class="t" data-fr="Guide d'utilisation" data-en="User Guide">Guide d'utilisation</span></h1>
+    <p class="t" data-fr="Tout ce que vous devez savoir pour gérer votre PME africaine avec Akili ERP — de l'inscription à la comptabilité OHADA." data-en="Everything you need to know to manage your African SME with Akili ERP — from registration to OHADA accounting.">Tout ce que vous devez savoir pour gérer votre PME africaine avec Akili ERP — de l'inscription à la comptabilité OHADA.</p>
+    <div class="guide-hero-btns">
+      <a href="https://akilierp.africavit.com" class="btn-primary">
+        <i class="fa-solid fa-rocket"></i> <span class="t" data-fr="Essayer gratuitement" data-en="Try for free">Essayer gratuitement</span>
+      </a>
+      <a href="#demarrage" class="btn-secondary" target="_self">
+        <i class="fa-solid fa-arrow-down"></i> <span class="t" data-fr="Lire le guide" data-en="Read the guide">Lire le guide</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- SOMMAIRE -->
+<div style="padding: 0 8%; max-width:1200px; margin:0 auto;">
+  <div class="toc">
+    <h3><i class="fa-solid fa-list"></i> <span class="t" data-fr="Sommaire" data-en="Table of Contents">Sommaire</span></h3>
+    <div class="toc-grid">
+      <a href="#cest-quoi" class="toc-item" target="_self"><span class="toc-num">1</span><i class="fa-solid fa-circle-info"></i> <span class="t" data-fr="C'est quoi Akili ERP ?" data-en="What is Akili ERP?">C'est quoi Akili ERP ?</span></a>
+      <a href="#demarrage" class="toc-item" target="_self"><span class="toc-num">2</span><i class="fa-solid fa-play"></i> <span class="t" data-fr="Démarrage rapide" data-en="Quick Start">Démarrage rapide</span></a>
+      <a href="#modules" class="toc-item" target="_self"><span class="toc-num">3</span><i class="fa-solid fa-grid-2"></i> <span class="t" data-fr="Les modules" data-en="The modules">Les modules</span></a>
+      <a href="#ohada" class="toc-item" target="_self"><span class="toc-num">4</span><i class="fa-solid fa-calculator"></i> <span class="t" data-fr="Comptabilité OHADA" data-en="OHADA Accounting">Comptabilité OHADA</span></a>
+      <a href="#rh" class="toc-item" target="_self"><span class="toc-num">5</span><i class="fa-solid fa-users"></i> <span class="t" data-fr="RH & Paie CNPS" data-en="HR & CNPS Payroll">RH & Paie CNPS</span></a>
+      <a href="#ia" class="toc-item" target="_self"><span class="toc-num">6</span><i class="fa-solid fa-robot"></i> <span class="t" data-fr="Assistant IA" data-en="AI Assistant">Assistant IA</span></a>
+      <a href="#tarifs" class="toc-item" target="_self"><span class="toc-num">7</span><i class="fa-solid fa-tag"></i> <span class="t" data-fr="Tarifs & Plans" data-en="Pricing & Plans">Tarifs & Plans</span></a>
+      <a href="#support" class="toc-item" target="_self"><span class="toc-num">8</span><i class="fa-solid fa-headset"></i> <span class="t" data-fr="Support & Contact" data-en="Support & Contact">Support & Contact</span></a>
+    </div>
+  </div>
+</div>
+
+<!-- CONTENU PRINCIPAL -->
+<div class="guide-content">
+
+  <!-- 1. C'EST QUOI -->
+  <div class="guide-section" id="cest-quoi">
+    <span class="section-tag"><i class="fa-solid fa-circle-info"></i> 01</span>
+    <h2><span class="t" data-fr="C'est quoi" data-en="What is">C'est quoi</span> <span>Akili ERP ?</span></h2>
+    <div class="lang-block">
+      <span class="lang-label lang-fr">🇫🇷 Français</span>
+      <p><strong>Akili ERP</strong> est un logiciel de gestion cloud conçu spécialement pour les <strong>PME africaines francophones</strong>. Il centralise toute la gestion de votre entreprise en un seul endroit : facturation, comptabilité OHADA, ressources humaines, stocks, clients et projets.</p>
+      <p>Édité par <strong>AFRICAViT SARL</strong> (Côte d'Ivoire), il fonctionne directement dans votre navigateur web — aucune installation requise. Accessible sur ordinateur et mobile.</p>
+    </div>
+    <div class="lang-block">
+      <span class="lang-label lang-en">🇬🇧 English</span>
+      <p><strong>Akili ERP</strong> is a cloud-based management software designed specifically for <strong>French-speaking African SMEs</strong>. It centralizes all your business management in one place: invoicing, OHADA accounting, human resources, inventory, clients and projects.</p>
+      <p>Published by <strong>AFRICAViT SARL</strong> (Côte d'Ivoire), it runs directly in your web browser — no installation required. Accessible on desktop and mobile.</p>
+    </div>
+    <div class="tip">
+      <i class="fa-solid fa-lightbulb"></i>
+      <p><strong>Akili</strong> signifie <em>"Intelligence"</em> en Swahili. <strong>Akili means "Intelligence" in Swahili.</strong></p>
+    </div>
+  </div>
+
+  <!-- 2. DÉMARRAGE -->
+  <div class="guide-section" id="demarrage">
+    <span class="section-tag"><i class="fa-solid fa-play"></i> 02</span>
+    <h2><span class="t" data-fr="Démarrage" data-en="Getting">Démarrage</span> <span class="t" data-fr="rapide" data-en="Started">rapide</span></h2>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-content">
+          <h4>🌐 <span class="t" data-fr="Accéder au site" data-en="Access the website">Accéder au site</span></h4>
+          <p class="t" data-fr="Ouvrez votre navigateur et allez sur akilierp.africavit.com" data-en="Open your browser and go to akilierp.africavit.com">Ouvrez votre navigateur et allez sur <strong>akilierp.africavit.com</strong></p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-content">
+          <h4>✍️ <span class="t" data-fr="Créer un compte" data-en="Create an account">Créer un compte</span></h4>
+          <p class="t" data-fr="Cliquez sur 'S'inscrire', entrez votre email et mot de passe. Votre organisation est créée automatiquement." data-en="Click 'Sign up', enter your email and password. Your organization is created automatically.">Cliquez sur <strong>'S'inscrire'</strong>, entrez votre email et mot de passe. Votre organisation est créée automatiquement.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-content">
+          <h4>⚙️ <span class="t" data-fr="Configurer votre entreprise" data-en="Set up your company">Configurer votre entreprise</span></h4>
+          <p class="t" data-fr="Allez dans Paramètres → renseignez votre nom d'entreprise, RCCM, IFU, adresse et logo. Ces infos apparaîtront sur vos documents PDF." data-en="Go to Settings → fill in your company name, RCCM, IFU, address and logo. This info will appear on your PDF documents.">Allez dans <strong>Paramètres</strong> → renseignez votre nom, RCCM, IFU, adresse et logo.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-content">
+          <h4>👥 <span class="t" data-fr="Ajouter vos clients" data-en="Add your clients">Ajouter vos clients</span></h4>
+          <p class="t" data-fr="Allez dans CRM Clients → cliquez sur 'Nouveau client' → renseignez les informations." data-en="Go to CRM Clients → click 'New client' → fill in the information.">Allez dans <strong>CRM Clients</strong> → cliquez sur <strong>'Nouveau client'</strong> → renseignez les informations.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-content">
+          <h4>📄 <span class="t" data-fr="Créer votre premier document" data-en="Create your first document">Créer votre premier document</span></h4>
+          <p class="t" data-fr="Allez dans Documents → Nouveau devis ou Nouvelle facture → l'IA génère le contenu automatiquement." data-en="Go to Documents → New quote or New invoice → AI generates the content automatically.">Allez dans <strong>Documents</strong> → <strong>Nouveau devis</strong> → l'IA génère le contenu automatiquement.</p>
+        </div>
+      </div>
+    </div>
+    <div class="warn">
+      <i class="fa-solid fa-triangle-exclamation"></i>
+      <p><strong>FR :</strong> Le plan Starter est <strong>100% gratuit</strong> — aucune carte bancaire requise. <br><strong>EN:</strong> The Starter plan is <strong>100% free</strong> — no credit card required.</p>
+    </div>
+  </div>
+
+  <!-- 3. MODULES -->
+  <div class="guide-section" id="modules">
+    <span class="section-tag"><i class="fa-solid fa-grid-2"></i> 03</span>
+    <h2><span class="t" data-fr="Les" data-en="The">Les</span> <span class="t" data-fr="modules" data-en="modules">modules</span></h2>
+    <div class="lang-block">
+      <span class="lang-label lang-fr">🇫🇷 Français</span>
+      <p>Akili ERP est organisé en <strong>8 modules</strong> accessibles depuis le menu de gauche.</p>
+    </div>
+    <div class="lang-block">
+      <span class="lang-label lang-en">🇬🇧 English</span>
+      <p>Akili ERP is organized into <strong>8 modules</strong> accessible from the left menu.</p>
+    </div>
+    <div class="modules-grid">
+      <div class="module-card">
+        <div class="module-icon"><i class="fa-solid fa-gauge-high"></i></div>
+        <h4>📊 Tableau de bord / Dashboard</h4>
+        <p class="fr">Vue d'ensemble en temps réel : CA, trésorerie, factures impayées, stocks, prévisions J+30/60/90.</p>
+        <p class="en">Real-time overview: revenue, cash flow, unpaid invoices, stock, forecasts D+30/60/90.</p>
+      </div>
+      <div class="module-card">
+        <div class="module-icon"><i class="fa-solid fa-file-invoice"></i></div>
+        <h4>📄 Documents / Documents</h4>
+        <p class="fr">Créez devis, factures, contrats et propositions commerciales. Export PDF, conversion devis→facture en 1 clic.</p>
+        <p class="en">Create quotes, invoices, contracts and commercial proposals. PDF export, quote→invoice conversion in 1 click.</p>
+      </div>
+      <div class="module-card">
+        <div class="module-icon"><i class="fa-solid fa-calculator"></i></div>
+        <h4>💰 Comptabilité / Accounting</h4>
+        <p class="fr">Plan comptable OHADA complet (classes 1-8), journal des écritures, résultat automatique.</p>
+        <p class="en">Full OHADA chart of accounts (classes 1-8), journal entries, automatic profit/loss calculation.</p>
+      </div>
+      <div class="module-card">
+        <div class="module-icon"><i class="fa-solid fa-handshake"></i></div>
+        <h4>🏢 CRM Clients / CRM</h4>
+        <p class="fr">Fiches clients, CA par client, statut actif/prospect, contact WhatsApp direct.</p>
+        <p class="en">Client profiles, revenue per client, active/prospect status, direct WhatsApp contact.</p>
+      </div>
+      <div class="module-card">
+        <div class="module-icon"><i class="fa-solid fa-boxes-stacked"></i></div>
+        <h4>📦 Stocks / Inventory</h4>
+        <p class="fr">Gestion des produits, alertes automatiques si stock bas, valeur d'inventaire en temps réel.</p>
+        <p class="en">Product management, automatic low stock alerts, real-time inventory value.</p>
+      </div>
+      <div class="module-card">
+        <div class="module-icon"><i class="fa-solid fa-users"></i></div>
+        <h4>👥 RH / HR</h4>
+        <p class="fr">Fiches employés, calcul automatique CNPS CI (6,3% salarié / 16% patronal), fiches de paie PDF.</p>
+        <p class="en">Employee profiles, automatic CNPS CI calculation (6.3% employee / 16% employer), PDF payslips.</p>
+      </div>
+      <div class="module-card">
+        <div class="module-icon"><i class="fa-solid fa-diagram-project"></i></div>
+        <h4>📁 Projets / Projects</h4>
+        <p class="fr">Kanban, tâches avec priorités, barre de progression, budget et chef de projet.</p>
+        <p class="en">Kanban board, tasks with priorities, progress bar, budget and project manager.</p>
+      </div>
+      <div class="module-card">
+        <div class="module-icon"><i class="fa-solid fa-chart-bar"></i></div>
+        <h4>📊 Rapports / Reports</h4>
+        <p class="fr">Vue consolidée, exports CSV : documents, clients, employés, écritures OHADA, stocks.</p>
+        <p class="en">Consolidated view, CSV exports: documents, clients, employees, OHADA entries, inventory.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. OHADA -->
+  <div class="guide-section" id="ohada">
+    <span class="section-tag"><i class="fa-solid fa-calculator"></i> 04</span>
+    <h2><span class="t" data-fr="Comptabilité" data-en="OHADA">Comptabilité</span> <span>OHADA</span></h2>
+    <div class="lang-block">
+      <span class="lang-label lang-fr">🇫🇷 Français</span>
+      <p>Le module comptabilité d'Akili ERP respecte le <strong>Plan Comptable OHADA</strong> utilisé dans 17 pays d'Afrique francophone. Chaque écriture est en <strong>partie double</strong> (Débit = Crédit).</p>
+    </div>
+    <div class="lang-block">
+      <span class="lang-label lang-en">🇬🇧 English</span>
+      <p>Akili ERP's accounting module follows the <strong>OHADA Chart of Accounts</strong> used in 17 French-speaking African countries. Each entry uses <strong>double-entry bookkeeping</strong> (Debit = Credit).</p>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-content">
+          <h4>🇫🇷 Saisir une écriture / 🇬🇧 Enter a journal entry</h4>
+          <p>FR : Allez dans Comptabilité → Nouvelle écriture → choisissez les comptes OHADA, entrez débit et crédit.</p>
+          <p class="step-en">EN: Go to Accounting → New entry → choose OHADA accounts, enter debit and credit amounts.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-content">
+          <h4>🇫🇷 Comptes principaux / 🇬🇧 Main accounts</h4>
+          <p>FR : 40 Fournisseurs · 41 Clients · 521 Banque · 571 Caisse · 601 Achats · 701 Ventes · 641 Salaires</p>
+          <p class="step-en">EN: 40 Suppliers · 41 Clients · 521 Bank · 571 Cash · 601 Purchases · 701 Sales · 641 Salaries</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-content">
+          <h4>🇫🇷 TVA en Côte d'Ivoire / 🇬🇧 VAT in Côte d'Ivoire</h4>
+          <p>FR : Taux normal <strong>18%</strong>. Montant TTC = HT × 1,18</p>
+          <p class="step-en">EN: Standard rate <strong>18%</strong>. VAT-inclusive = excl. VAT × 1.18</p>
+        </div>
+      </div>
+    </div>
+    <div class="tip">
+      <i class="fa-solid fa-lightbulb"></i>
+      <p><strong>FR :</strong> Le résultat est calculé automatiquement : Produits (classe 7) − Charges (classe 6). <br><strong>EN:</strong> Net result is calculated automatically: Revenue (class 7) − Expenses (class 6).</p>
+    </div>
+  </div>
+
+  <!-- 5. RH -->
+  <div class="guide-section" id="rh">
+    <span class="section-tag"><i class="fa-solid fa-users"></i> 05</span>
+    <h2>RH & <span>Paie CNPS</span></h2>
+    <div class="lang-block">
+      <span class="lang-label lang-fr">🇫🇷 Français</span>
+      <p>Le module RH calcule automatiquement les cotisations <strong>CNPS de Côte d'Ivoire</strong> et génère les fiches de paie en PDF.</p>
+    </div>
+    <div class="lang-block">
+      <span class="lang-label lang-en">🇬🇧 English</span>
+      <p>The HR module automatically calculates <strong>Côte d'Ivoire CNPS</strong> contributions and generates PDF payslips.</p>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-content">
+          <h4>🇫🇷 Calcul CNPS / 🇬🇧 CNPS Calculation</h4>
+          <p>FR : Part salariale = <strong>6,3%</strong> du brut · Part patronale = <strong>16%</strong> du brut</p>
+          <p class="step-en">EN: Employee share = <strong>6.3%</strong> of gross · Employer share = <strong>16%</strong> of gross</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-content">
+          <h4>🇫🇷 Salaire net / 🇬🇧 Net salary</h4>
+          <p>FR : Salaire net = Brut × <strong>0,937</strong> (après déduction CNPS salariale)</p>
+          <p class="step-en">EN: Net salary = Gross × <strong>0.937</strong> (after employee CNPS deduction)</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-content">
+          <h4>🇫🇷 Générer une fiche de paie / 🇬🇧 Generate a payslip</h4>
+          <p>FR : RH → cliquez sur un employé → "Fiche de paie" → imprimez ou téléchargez en PDF</p>
+          <p class="step-en">EN: HR → click on an employee → "Payslip" → print or download as PDF</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6. IA -->
+  <div class="guide-section" id="ia">
+    <span class="section-tag"><i class="fa-solid fa-robot"></i> 06</span>
+    <h2><span class="t" data-fr="Assistant" data-en="AI">Assistant</span> <span>IA</span></h2>
+    <div class="lang-block">
+      <span class="lang-label lang-fr">🇫🇷 Français</span>
+      <p>Akili ERP intègre un <strong>assistant IA</strong> disponible dans le menu "Aide". Il répond à toutes vos questions sur l'utilisation du logiciel, la comptabilité OHADA, la gestion RH et le business africain.</p>
+    </div>
+    <div class="lang-block">
+      <span class="lang-label lang-en">🇬🇧 English</span>
+      <p>Akili ERP includes an <strong>AI assistant</strong> available in the "Help" menu. It answers all your questions about using the software, OHADA accounting, HR management and African business.</p>
+    </div>
+    <div class="tip">
+      <i class="fa-solid fa-robot"></i>
+      <p>
+        <strong>FR — Exemples de questions :</strong> "Comment créer une facture ?", "Quel compte OHADA pour les achats ?", "Calcule mon salaire net si le brut est 250 000 FCFA"<br><br>
+        <strong>EN — Example questions:</strong> "How do I create an invoice?", "Which OHADA account for purchases?", "Calculate my net salary if gross is 250,000 FCFA"
+      </p>
+    </div>
+    <div class="warn">
+      <i class="fa-solid fa-triangle-exclamation"></i>
+      <p><strong>FR :</strong> Quota mensuel : 30 requêtes (Starter) · 150 (Business) · Illimité (Enterprise) <br><strong>EN:</strong> Monthly quota: 30 requests (Starter) · 150 (Business) · Unlimited (Enterprise)</p>
+    </div>
+  </div>
+
+  <!-- 7. TARIFS -->
+  <div class="guide-section" id="tarifs">
+    <span class="section-tag"><i class="fa-solid fa-tag"></i> 07</span>
+    <h2><span class="t" data-fr="Tarifs &" data-en="Pricing &">Tarifs &</span> <span class="t" data-fr="Plans" data-en="Plans">Plans</span></h2>
+    <div class="plans-grid">
+      <div class="plan-card">
+        <p class="plan-name">Starter</p>
+        <p class="plan-price">Gratuit <span>/ Free</span></p>
+        <p class="plan-desc-fr">Pour démarrer votre activité</p>
+        <p class="plan-desc-en">To get started</p>
+        <a href="https://akilierp.africavit.com" class="plan-cta">Commencer / Start</a>
+      </div>
+      <div class="plan-card featured">
+        <p class="plan-name">Business ⭐</p>
+        <p class="plan-price">15 000 FCFA <span>/ mois</span></p>
+        <p class="plan-desc-fr">Pour les PME en croissance</p>
+        <p class="plan-desc-en">For growing SMEs</p>
+        <a href="https://akilierp.africavit.com" class="plan-cta">S'abonner / Subscribe</a>
+      </div>
+      <div class="plan-card">
+        <p class="plan-name">Enterprise</p>
+        <p class="plan-price">50 000 FCFA <span>/ mois</span></p>
+        <p class="plan-desc-fr">Pour les grandes structures</p>
+        <p class="plan-desc-en">For large organizations</p>
+        <a href="https://wa.me/2250799246182" class="plan-cta">Nous contacter / Contact us</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8. SUPPORT -->
+  <div class="guide-section" id="support">
+    <span class="section-tag"><i class="fa-solid fa-headset"></i> 08</span>
+    <h2><span class="t" data-fr="Support &" data-en="Support &">Support &</span> <span>Contact</span></h2>
+    <div class="lang-block">
+      <span class="lang-label lang-fr">🇫🇷 Français</span>
+      <p>Notre équipe est disponible pour vous accompagner dans l'utilisation d'Akili ERP.</p>
+    </div>
+    <div class="lang-block">
+      <span class="lang-label lang-en">🇬🇧 English</span>
+      <p>Our team is available to assist you with using Akili ERP.</p>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num"><i class="fab fa-whatsapp" style="font-size:16px;"></i></div>
+        <div class="step-content">
+          <h4>WhatsApp</h4>
+          <p>FR : Contactez-nous sur WhatsApp pour une assistance rapide. <br><em>EN: Contact us on WhatsApp for quick support.</em></p>
+          <p><a href="https://wa.me/2250799246182" style="color:var(--gold);">+225 07 99 24 61 82</a></p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"><i class="fa-solid fa-envelope" style="font-size:14px;"></i></div>
+        <div class="step-content">
+          <h4>Email</h4>
+          <p>FR : Pour toute demande technique ou commerciale. <br><em>EN: For any technical or commercial request.</em></p>
+          <p><a href="mailto:contact@africavit.com" style="color:var(--gold);">contact@africavit.com</a></p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num"><i class="fa-solid fa-robot" style="font-size:14px;"></i></div>
+        <div class="step-content">
+          <h4>FR : Assistant IA intégré / EN: Built-in AI Assistant</h4>
+          <p>FR : Connectez-vous à Akili ERP → menu "Aide" → posez votre question directement à l'IA.</p>
+          <p class="step-en">EN: Log in to Akili ERP → "Help" menu → ask your question directly to the AI.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CTA FINAL -->
+  <div class="guide-cta">
+    <h2>🚀 <span class="t" data-fr="Prêt à démarrer ?" data-en="Ready to get started?">Prêt à démarrer ?</span></h2>
+    <h3 class="t" data-fr="Start managing your business today" data-en="Start managing your business today">Start managing your business today</h3>
+    <p class="t" data-fr="Le plan Starter est 100% gratuit — aucune carte bancaire requise." data-en="The Starter plan is 100% free — no credit card required.">Le plan Starter est 100% gratuit — aucune carte bancaire requise.</p>
+    <p class="t" data-fr="Rejoignez les PME africaines qui font confiance à Akili ERP." data-en="Join the African SMEs that trust Akili ERP.">Rejoignez les PME africaines qui font confiance à Akili ERP.</p>
+    <div class="cta-btns">
+      <a href="https://akilierp.africavit.com" class="btn-primary">
+        <i class="fa-solid fa-rocket"></i> <span class="t" data-fr="Essayer gratuitement" data-en="Try for free">Essayer gratuitement</span>
+      </a>
+      <a href="https://wa.me/2250799246182" class="btn-secondary">
+        <i class="fab fa-whatsapp"></i> <span class="t" data-fr="Parler à un expert" data-en="Talk to an expert">Parler à un expert</span>
+      </a>
+      <a href="index.html" class="btn-secondary" target="_self">
+        <i class="fa-solid fa-arrow-left"></i> <span class="t" data-fr="Retour au site" data-en="Back to website">Retour au site</span>
+      </a>
+    </div>
+  </div>
+
+</div>
+
+<!-- FOOTER -->
+<div class="guide-footer">
+  <p>© 2026 <a href="index.html" target="_self">Akili ERP</a> — une marque d'<a href="https://www.africavit.com">AFRICAViT SARL</a></p>
+  <p>Abidjan, Côte d'Ivoire 🇨🇮 · <a href="mailto:contact@africavit.com">contact@africavit.com</a></p>
+</div>
+
+<script>
+  // LANGUE
+  let currentLang = 'fr';
+
+  function setLang(lang) {
+    currentLang = lang;
+    document.getElementById('btnFr').classList.toggle('active', lang === 'fr');
+    document.getElementById('btnEn').classList.toggle('active', lang === 'en');
+    document.querySelectorAll('.t').forEach(el => {
+      const val = el.getAttribute('data-' + lang);
+      if (val) el.textContent = val;
+    });
+  }
+
+  // REVEAL
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(e => { if (e.isIntersecting) e.target.style.opacity = '1'; });
+  }, { threshold: 0.1 });
+
+  document.querySelectorAll('.guide-section, .toc, .guide-cta').forEach(el => {
+    el.style.opacity = '0';
+    el.style.transition = 'opacity 0.6s ease';
+    observer.observe(el);
+  });
+</script>
+
+</body>
+</html>
