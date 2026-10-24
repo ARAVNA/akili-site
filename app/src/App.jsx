@@ -83,7 +83,7 @@ const sb = () => {
 const actif = () => SB_OK && !!sb();
 
 const TABLE = "akili_stores";
-const MODULES_ORG = ["docs","clients","stocks","mvts","employes","paie","ecrit"];
+const MODULES_ORG = ["docs","clients","stocks","mvts","employes","paie","ecrit","fourn","achats","projets","sign"];
 
 // ─── STORAGE ──────────────────────────────────────────────────────
 // API SYNCHRONE : les 7 modules lisent et écrivent comme avant.
@@ -384,6 +384,234 @@ const today = ()=>new Date().toLocaleDateString("fr-FR");
 const newId = p=>`${p}-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`;
 const SYSTEM = `Tu es AKILI ERP, expert OHADA, gestion stocks, RH/paie et business pour entrepreneurs africains francophones. FCFA, Mobile Money, PME ivoiriennes. Concis et pratique. Rappelle toujours que tes réponses sont indicatives.`;
 
+// ═══════════════════════════════════════════════════════════════════
+// MOTEUR COMPTABLE OHADA (SYSCOHADA révisé)
+//
+// Principe : il n'y a qu'UNE source de vérité, le journal. Le grand
+// livre, la balance, le compte de résultat et le bilan n'en sont que
+// des lectures différentes, recalculées à chaque affichage. Aucun
+// report manuel, donc aucune divergence possible entre les états.
+//
+// Et les écritures elles-mêmes ne se saisissent pas : chaque facture,
+// chaque achat, chaque bulletin de paie les produit automatiquement.
+// ═══════════════════════════════════════════════════════════════════
+
+// ─── Plan comptable ───────────────────────────────────────────────
+const PLAN_OHADA = {
+  // Classe 1 — Capitaux
+  "101":"Capital social",            "106":"Réserves",
+  "110":"Report à nouveau",          "120":"Résultat net de l'exercice",
+  "162":"Emprunts bancaires",
+  // Classe 2 — Immobilisations
+  "211":"Logiciels et licences",     "221":"Terrains",
+  "231":"Bâtiments",                 "241":"Matériel et outillage",
+  "245":"Matériel de transport",     "244":"Mobilier de bureau",
+  "281":"Amortissements",
+  // Classe 3 — Stocks
+  "311":"Stocks de marchandises",    "321":"Matières premières",
+  "351":"Produits finis",
+  // Classe 4 — Tiers
+  "401":"Fournisseurs",              "408":"Fournisseurs, factures non parvenues",
+  "411":"Clients",                   "416":"Clients douteux",
+  "422":"Personnel, rémunérations dues",
+  "431":"CNPS",                      "447":"Impôts sur salaires (ITS)",
+  "443":"TVA facturée (collectée)",  "445":"TVA déductible sur achats",
+  "444":"État, TVA à décaisser",
+  // Classe 5 — Trésorerie
+  "521":"Banque",                    "531":"Mobile Money",
+  "571":"Caisse",
+  // Classe 6 — Charges
+  "601":"Achats de marchandises",    "605":"Autres achats",
+  "622":"Loyers et charges locatives","626":"Télécommunications",
+  "631":"Frais bancaires",           "641":"Impôts et taxes",
+  "661":"Rémunérations du personnel","664":"Charges sociales patronales",
+  "681":"Dotations aux amortissements",
+  // Classe 7 — Produits
+  "701":"Ventes de marchandises",    "706":"Services vendus",
+  "707":"Produits accessoires",      "771":"Revenus financiers",
+};
+const libelleCompte = c => PLAN_OHADA[c] || "Compte " + c;
+const classeDe      = c => String(c||"").charAt(0);
+
+// Sens naturel d'un compte : les charges et l'actif augmentent au débit,
+// les produits, le passif et les capitaux augmentent au crédit.
+const sensNaturel = c => ["2","3","5","6"].includes(classeDe(c)) ? "D"
+                       : ["1","7"].includes(classeDe(c))         ? "C"
+                       : "M";   // classe 4 : mixte, selon le solde
+
+const Compta = {
+  // ── Grand livre : toutes les écritures regroupées par compte ──
+  grandLivre(ecritures){
+    const m=new Map();
+    ecritures.forEach(e=>{
+      const c=String(e.compte||"").trim(); if(!c) return;
+      if(!m.has(c)) m.set(c,{compte:c,libelle:libelleCompte(c),lignes:[],debit:0,credit:0});
+      const g=m.get(c);
+      const d=Number(e.debit||0), cr=Number(e.credit||0);
+      g.debit+=d; g.credit+=cr;
+      g.lignes.push({...e,debit:d,credit:cr});
+    });
+    return [...m.values()].map(g=>{
+      // Les lignes sont rangées de la plus ancienne à la plus récente,
+      // avec le solde cumulé après chaque opération — c'est ce que le
+      // comptable lit pour pointer un compte.
+      const lignes=[...g.lignes].reverse();
+      let cum=0;
+      lignes.forEach(l=>{ cum += l.debit - l.credit; l.solde=cum; });
+      return {...g, lignes, solde:g.debit-g.credit};
+    }).sort((a,b)=>a.compte.localeCompare(b.compte));
+  },
+
+  // ── Balance générale à six colonnes ──
+  balance(ecritures){
+    const gl=Compta.grandLivre(ecritures);
+    const lignes=gl.map(g=>({
+      compte:g.compte, libelle:g.libelle,
+      mvtDebit:g.debit, mvtCredit:g.credit,
+      soldeDebiteur: g.solde>0? g.solde:0,
+      soldeCrediteur:g.solde<0?-g.solde:0,
+    }));
+    const t=lignes.reduce((a,l)=>({
+      mvtDebit:a.mvtDebit+l.mvtDebit, mvtCredit:a.mvtCredit+l.mvtCredit,
+      soldeDebiteur:a.soldeDebiteur+l.soldeDebiteur, soldeCrediteur:a.soldeCrediteur+l.soldeCrediteur,
+    }),{mvtDebit:0,mvtCredit:0,soldeDebiteur:0,soldeCrediteur:0});
+    return {lignes,totaux:t,equilibree:t.mvtDebit===t.mvtCredit&&t.soldeDebiteur===t.soldeCrediteur};
+  },
+
+  // ── Compte de résultat : classes 6 et 7 ──
+  resultat(ecritures){
+    const gl=Compta.grandLivre(ecritures);
+    const charges=gl.filter(g=>classeDe(g.compte)==="6")
+      .map(g=>({compte:g.compte,libelle:g.libelle,montant:g.debit-g.credit}))
+      .filter(x=>x.montant!==0).sort((a,b)=>b.montant-a.montant);
+    const produits=gl.filter(g=>classeDe(g.compte)==="7")
+      .map(g=>({compte:g.compte,libelle:g.libelle,montant:g.credit-g.debit}))
+      .filter(x=>x.montant!==0).sort((a,b)=>b.montant-a.montant);
+    const totalCharges =charges.reduce((s,x)=>s+x.montant,0);
+    const totalProduits=produits.reduce((s,x)=>s+x.montant,0);
+    return {charges,produits,totalCharges,totalProduits,resultat:totalProduits-totalCharges};
+  },
+
+  // ── Bilan : classes 1 à 5, plus le résultat de l'exercice ──
+  // Le résultat n'est pas saisi : il vient du compte de résultat et
+  // s'inscrit au passif. C'est ce qui fait que le bilan s'équilibre
+  // tout seul dès que le journal est équilibré.
+  bilan(ecritures){
+    const gl=Compta.grandLivre(ecritures);
+    const par=(pred,sens)=>gl.filter(g=>pred(g.compte))
+      .map(g=>({compte:g.compte,libelle:g.libelle,montant:sens==="D"?g.solde:-g.solde}))
+      .filter(x=>x.montant>0).sort((a,b)=>b.montant-a.montant);
+
+    const immobilisations=par(c=>classeDe(c)==="2"&&!c.startsWith("28"),"D");
+    const amortissements =par(c=>c.startsWith("28"),"C");
+    const stocks         =par(c=>classeDe(c)==="3","D");
+    const creances       =par(c=>classeDe(c)==="4","D");
+    const tresorerieActif=par(c=>classeDe(c)==="5","D");
+
+    const capitaux       =par(c=>classeDe(c)==="1"&&!c.startsWith("16")&&c!=="120","C");
+    const dettesFin      =par(c=>c.startsWith("16"),"C");
+    const dettes         =par(c=>classeDe(c)==="4","C");
+    const tresoreriePassif=par(c=>classeDe(c)==="5","C");
+
+    const res=Compta.resultat(ecritures).resultat;
+
+    const actif=[
+      {section:"Immobilisations",      lignes:immobilisations},
+      {section:"Amortissements (−)",   lignes:amortissements, negatif:true},
+      {section:"Stocks",               lignes:stocks},
+      {section:"Créances",             lignes:creances},
+      {section:"Trésorerie — actif",   lignes:tresorerieActif},
+    ].filter(s=>s.lignes.length);
+    const passif=[
+      {section:"Capitaux propres",     lignes:capitaux},
+      {section:"Dettes financières",   lignes:dettesFin},
+      {section:"Dettes circulantes",   lignes:dettes},
+      {section:"Trésorerie — passif",  lignes:tresoreriePassif},
+    ].filter(s=>s.lignes.length);
+
+    const som=secs=>secs.reduce((s,x)=>s+x.lignes.reduce((a,l)=>a+l.montant,0)*(x.negatif?-1:1),0);
+    const totalActif=som(actif);
+    const totalPassif=som(passif)+res;
+    return {actif,passif,resultat:res,totalActif,totalPassif,
+            ecart:totalActif-totalPassif, equilibre:totalActif===totalPassif};
+  },
+
+  // ── Contrôles de cohérence ──
+  // Ce que vérifierait un expert-comptable avant d'accepter un dossier.
+  controles(ecritures){
+    const out=[];
+    const d=ecritures.reduce((s,e)=>s+Number(e.debit||0),0);
+    const c=ecritures.reduce((s,e)=>s+Number(e.credit||0),0);
+    if(!ecritures.length) return [{n:"info",m:"Aucune écriture : le dossier est vide."}];
+    if(d!==c) out.push({n:"err",m:`Journal déséquilibré de ${fmtN(Math.abs(d-c))} F — débits ${fmtN(d)}, crédits ${fmtN(c)}.`});
+    const sansCompte=ecritures.filter(e=>!e.compte).length;
+    if(sansCompte) out.push({n:"err",m:`${sansCompte} écriture(s) sans compte imputé.`});
+    const horsPlan=[...new Set(ecritures.map(e=>String(e.compte||"")).filter(x=>x&&!PLAN_OHADA[x]))];
+    if(horsPlan.length) out.push({n:"warn",m:`Compte(s) hors plan SYSCOHADA : ${horsPlan.join(", ")}.`});
+    const sansPiece=ecritures.filter(e=>!e.piece).length;
+    if(sansPiece) out.push({n:"warn",m:`${sansPiece} écriture(s) sans numéro de pièce justificative (obligatoire en OHADA).`});
+    const b=Compta.bilan(ecritures);
+    if(!b.equilibre) out.push({n:"err",m:`Bilan déséquilibré de ${fmtN(Math.abs(b.ecart))} F.`});
+    if(!out.length) out.push({n:"ok",m:"Journal équilibré, bilan équilibré, toutes les pièces référencées."});
+    return out;
+  },
+};
+
+// ─── Écritures automatiques ───────────────────────────────────────
+// Chaque pièce (facture, achat, bulletin) porte un identifiant `src`.
+// Reposter la même pièce remplace ses écritures au lieu de les
+// dupliquer ; supprimer la pièce les retire. C'est ce qui permet de
+// tout générer automatiquement sans jamais créer de doublon.
+function posterEcritures(orgId, src, lignes){
+  const KEY=`akili_ecrit_${orgId}`;
+  const ex=Store.get(KEY,[]).filter(e=>e.src!==src);
+  if(!lignes||!lignes.length){ Store.set(KEY,ex); return 0; }
+  const nouvelles=lignes
+    .filter(l=>Number(l.debit||0)!==0||Number(l.credit||0)!==0)
+    .map((l,i)=>({id:`${src}-${i}`,src,...l,auto:true}));
+  Store.set(KEY,[...nouvelles,...ex]);
+  return nouvelles.length;
+}
+function retirerEcritures(orgId, src){ return posterEcritures(orgId, src, []); }
+
+// Une facture de vente : le client doit le TTC, l'entreprise gagne le HT,
+// et l'État attend la TVA collectée.
+function ecrituresVente({date,libelle,piece,montantHT,tauxTVA=18,compteProduit="706",encaisse=false,compteTresorerie="521"}){
+  const ht=Math.round(Number(montantHT||0));
+  const tva=Math.round(ht*Number(tauxTVA||0)/100);
+  const ttc=ht+tva;
+  const l=[
+    {date,libelle,piece,compte:encaisse?compteTresorerie:"411",debit:ttc,credit:0},
+    {date,libelle,piece,compte:compteProduit,debit:0,credit:ht},
+  ];
+  if(tva) l.push({date,libelle:`TVA collectée — ${libelle}`,piece,compte:"443",debit:0,credit:tva});
+  return l;
+}
+
+// Un achat : la charge au débit, la TVA récupérable au débit, la dette
+// fournisseur au crédit.
+function ecrituresAchat({date,libelle,piece,montantHT,tauxTVA=18,compteCharge="601",regle=false,compteTresorerie="521"}){
+  const ht=Math.round(Number(montantHT||0));
+  const tva=Math.round(ht*Number(tauxTVA||0)/100);
+  const ttc=ht+tva;
+  const l=[{date,libelle,piece,compte:compteCharge,debit:ht,credit:0}];
+  if(tva) l.push({date,libelle:`TVA déductible — ${libelle}`,piece,compte:"445",debit:tva,credit:0});
+  l.push({date,libelle,piece,compte:regle?compteTresorerie:"401",debit:0,credit:ttc});
+  return l;
+}
+
+// Un bulletin de paie : la charge est le coût total employeur ; se
+// répartissent le net à payer, les cotisations CNPS et l'ITS.
+function ecrituresPaie({date,libelle,piece,brut,cnpsSalarie,cnpsPatronal,its,net}){
+  return [
+    {date,libelle,piece,compte:"661",debit:Math.round(brut),credit:0},
+    {date,libelle:`Charges patronales — ${libelle}`,piece,compte:"664",debit:Math.round(cnpsPatronal),credit:0},
+    {date,libelle:`Net à payer — ${libelle}`,piece,compte:"422",debit:0,credit:Math.round(net)},
+    {date,libelle:`CNPS — ${libelle}`,piece,compte:"431",debit:0,credit:Math.round(cnpsSalarie)+Math.round(cnpsPatronal)},
+    {date,libelle:`ITS — ${libelle}`,piece,compte:"447",debit:0,credit:Math.round(its)},
+  ];
+}
+
 // ─── BASE UI ──────────────────────────────────────────────────────
 const Btn=({children,onClick,variant="primary",disabled,full,sm,style={}})=>(
   <button onClick={onClick} disabled={disabled} style={{padding:sm?"7px 14px":"12px 20px",borderRadius:8,cursor:disabled?"not-allowed":"pointer",fontFamily:"inherit",fontSize:sm?15:17,fontWeight:700,transition:"all .18s",width:full?"100%":"auto",background:variant==="primary"?`linear-gradient(135deg,${T.accent},${T.accentD})`:variant==="danger"?T.red:variant==="green"?T.green:variant==="blue"?T.blue:variant==="ghost"?"transparent":T.light,color:variant==="primary"?"#000":variant==="ghost"?T.muted:T.text,border:variant==="ghost"?`1px solid ${T.border}`:"none",opacity:disabled?.5:1,...style}}>{children}</button>
@@ -403,7 +631,7 @@ const Sel=({label,value,onChange,options,required})=>(
     </select>
   </div>
 );
-const Card=({children,style={}})=>(<div style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:12,padding:14,...style}}>{children}</div>);
+const Card=({children,style={},onClick})=>(<div onClick={onClick} style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:12,padding:14,...style}}>{children}</div>);
 const Badge=({label,color})=>(<span style={{padding:"3px 10px",borderRadius:20,fontSize:14,fontWeight:700,background:color+"22",color,border:`1px solid ${color}33`}}>{label}</span>);
 const Toast=({n})=>n?(<div style={{position:"fixed",top:12,left:"50%",transform:"translateX(-50%)",background:n.color,color:"#fff",padding:"12px 20px",borderRadius:20,fontSize:16,fontWeight:700,zIndex:999,boxShadow:"0 4px 24px #0008",maxWidth:"90vw",textAlign:"center"}}>{n.msg}</div>):null;
 const Pager=({total,page,pp,onPage})=>{ const pages=Math.ceil(total/pp); if(pages<=1) return null; return(<div style={{display:"flex",justifyContent:"center",gap:6,padding:"13px 0"}}><Btn variant="ghost" sm disabled={page===0} onClick={()=>onPage(page-1)}>←</Btn><span style={{fontSize:15,color:T.muted,alignSelf:"center"}}>{page+1}/{pages}</span><Btn variant="ghost" sm disabled={page>=pages-1} onClick={()=>onPage(page+1)}>→</Btn></div>); };
@@ -539,7 +767,10 @@ function Dashboard(){
     {id:"clients", icon:"👥",label:"Clients"},
     {id:"stocks",  icon:"📦",label:"Stocks"},
     {id:"rh",      icon:"👔",label:"RH/Paie"},
+    {id:"achats",  icon:"🧾",label:"Achats"},
+    {id:"projets", icon:"📁",label:"Projets"},
     {id:"compta",  icon:"📒",label:"OHADA"},
+    {id:"sign",    icon:"✍️",label:"Signature"},
     {id:"chat",    icon:"🤖",label:"IA"},
   ];
   return(
@@ -558,7 +789,10 @@ function Dashboard(){
           <button onClick={logout} style={{background:"none",border:`1px solid ${T.border}`,borderRadius:6,padding:"3px 9px",color:T.muted,fontSize:13,cursor:"pointer"}}>Déco</button>
         </div>
       </div>
-      <div style={{display:"flex",background:T.card,borderBottom:`1px solid ${T.border}`,overflowX:"auto"}}>
+      <div style={{display:"flex",background:T.card,borderBottom:`1px solid ${T.border}`,overflowX:"auto",
+                   WebkitOverflowScrolling:"touch",scrollbarWidth:"none",
+                   maskImage:"linear-gradient(90deg,#000 0,#000 calc(100% - 22px),transparent 100%)",
+                   WebkitMaskImage:"linear-gradient(90deg,#000 0,#000 calc(100% - 22px),transparent 100%)"}}>
         {tabs.map(t=>(<button key={t.id} onClick={()=>setTab(t.id)} style={{flex:"0 0 auto",minWidth:56,padding:"10px 5px",background:"none",border:"none",cursor:"pointer",borderBottom:tab===t.id?`2px solid ${T.accent}`:"2px solid transparent",color:tab===t.id?T.accent:T.muted,fontSize:12.5,fontWeight:tab===t.id?700:400,display:"flex",flexDirection:"column",alignItems:"center",gap:2,transition:"all .2s"}}><span style={{fontSize:18}}>{t.icon}</span>{t.label}</button>))}
       </div>
       <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
@@ -567,7 +801,10 @@ function Dashboard(){
         {tab==="clients" && <ClientsTab key={sv} orgId={orgId} user={user} notify={notify}/>}
         {tab==="stocks"  && <StocksTab key={sv}  orgId={orgId} user={user} notify={notify}/>}
         {tab==="rh"      && <RHTab key={sv}      orgId={orgId} user={user} notify={notify}/>}
+        {tab==="achats"  && <AchatsTab key={sv}  orgId={orgId} user={user} notify={notify}/>}
+        {tab==="projets" && <ProjetsTab key={sv} orgId={orgId} user={user} notify={notify}/>}
         {tab==="compta"  && <ComptaTab key={sv}  orgId={orgId} user={user} notify={notify}/>}
+        {tab==="sign"    && <SignatureTab key={sv} orgId={orgId} user={user} notify={notify}/>}
         {tab==="chat"    && <ChatTab key={sv}    user={user} plan={plan} notify={notify} onUpgrade={()=>{}}/>}
       </div>
       <style>{CSS}</style>
@@ -1004,8 +1241,17 @@ function RHTab({orgId,user,notify}){
   const genererFichePaie=(emp)=>{
     const paie=calculerPaie(emp);
     const fiche={id:newId("FP"),employeId:emp.id,employeNom:emp.nom,poste:emp.poste,mois:paieMonth,...paie,date:today()};
+    const remplacee=fiches.find(f=>f.employeId===emp.id&&f.mois===paieMonth);
+    if(remplacee) retirerEcritures(orgId,remplacee.id);
     saveF([fiche,...fiches.filter(f=>!(f.employeId===emp.id&&f.mois===paieMonth))]);
-    notify(`✅ Fiche de paie générée — ${emp.nom} — Net: ${fmtN(paie.net)} FCFA`);
+    // La paie passe seule en comptabilité : 661 et 664 au débit,
+    // net à payer, CNPS et ITS au crédit.
+    posterEcritures(orgId,fiche.id,ecrituresPaie({
+      date:fiche.date, libelle:`Paie ${emp.nom} — ${paieMonth}`, piece:fiche.id,
+      brut:paie.brut, cnpsSalarie:paie.cnpsSalarie, cnpsPatronal:paie.cnpsPatronal,
+      its:paie.its, net:paie.net,
+    }));
+    notify(`✅ Fiche de paie générée — ${emp.nom} — Net: ${fmtN(paie.net)} FCFA · écritures OHADA créées`);
   };
 
   const genererTous=()=>{
@@ -1231,7 +1477,18 @@ function DocsTab({orgId,user,plan,notify,onUpgrade}){
       if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.error?.message||`Erreur API (${r.status})`);}
       const d=await r.json();if(d.error) throw new Error(d.error.message);
       const txt=d.content?.[0]?.text||"";if(!txt) throw new Error("Réponse vide");
-      setGen(txt);save([{id:num,type:docType,client:form.client,montant:form.montant,devise:form.devise,date:today(),content:txt,owner:user.uid},...docs]);
+      const doc={id:num,type:docType,client:form.client,montant:form.montant,devise:form.devise,date:today(),content:txt,owner:user.uid};
+      setGen(txt);save([doc,...docs]);
+      // Seule une facture engendre une vente : un devis n'est pas une
+      // créance tant qu'il n'est pas accepté, et le comptabiliser
+      // gonflerait artificiellement le chiffre d'affaires.
+      if(docType==="facture" && doc.devise==="FCFA" && Number(doc.montant)>0){
+        posterEcritures(orgId,doc.id,ecrituresVente({
+          date:doc.date, libelle:`Facture ${doc.client||"client"}`, piece:doc.id,
+          montantHT:Number(doc.montant), tauxTVA:18, compteProduit:"706",
+        }));
+        notify("📒 Facture comptabilisée (411 / 706 / 443)");
+      }
       notify("✅ Document généré et sauvegardé !");
     }catch(e){setApiErr(e.message||"Erreur de génération.");}
     setLoad(false);
@@ -1332,44 +1589,331 @@ function ClientsTab({orgId,user,notify}){
 }
 
 // ─── COMPTA TAB (compact) ─────────────────────────────────────────
+// ─── COMPTABILITÉ OHADA ───────────────────────────────────────────
+// Sept lectures d'un même journal. Rien n'est reporté à la main :
+// changez une écriture, le grand livre, la balance, le résultat et le
+// bilan suivent dans la seconde.
 function ComptaTab({orgId,user,notify}){
   const KEY=`akili_ecrit_${orgId}`;
-  const [ecritures,setEcrit]=useState(()=>Store.get(KEY,[]));
   const [view,setView]=useState("journal");
-  const [showForm,setShow]=useState(false);
-  const [page,setPage]=useState(0);
-  const PP=15;
-  const [form,setForm]=useState({date:today(),libelle:"",compte:"706",debit:"",credit:"",piece:""});
+  const [ecritures,setEcritures]=useState(()=>Store.get(KEY,[]));
+  const [page,setPage]=useState(0); const PP=15;
+  const [cpt,setCpt]=useState("");       // compte ouvert dans le grand livre
   const [errors,setErrors]=useState({});
-  const COMPTES=[{code:"521",lib:"Banque"},{code:"571",lib:"Caisse"},{code:"411",lib:"Clients"},{code:"401",lib:"Fournisseurs"},{code:"601",lib:"Achats"},{code:"621",lib:"Personnel"},{code:"626",lib:"Télécoms"},{code:"631",lib:"Frais bancaires"},{code:"641",lib:"Impôts"},{code:"661",lib:"Charges financières"},{code:"701",lib:"Ventes march."},{code:"706",lib:"Services vendus"},{code:"707",lib:"Produits access."}];
-  const save=a=>{setEcrit(a);Store.set(KEY,a);};
-  const validate=()=>{const e={};if(!form.libelle.trim())e.libelle="Libellé requis";if(!form.debit&&!form.credit)e.montant="Entrez débit ou crédit";else if(form.debit&&(isNaN(Number(form.debit))||Number(form.debit)<=0))e.montant="Débit invalide";else if(form.credit&&(isNaN(Number(form.credit))||Number(form.credit)<=0))e.montant="Crédit invalide";setErrors(e);return!Object.keys(e).length;};
-  const add=()=>{if(!validate())return;save([{...form,id:newId("ECR")},...ecritures]);setForm({date:today(),libelle:"",compte:"706",debit:"",credit:"",piece:""});setErrors({});setShow(false);notify("✅ Écriture OHADA enregistrée");};
-  const del=id=>{save(ecritures.filter(e=>e.id!==id));notify("Supprimé",T.red);};
-  const totalProd=ecritures.filter(e=>e.compte?.startsWith("7")).reduce((s,e)=>s+Number(e.credit||0),0);
-  const totalCh=ecritures.filter(e=>e.compte?.startsWith("6")).reduce((s,e)=>s+Number(e.debit||0),0);
-  const resultat=totalProd-totalCh;
+  const vide={date:today(),libelle:"",compte:"521",debit:"",credit:"",piece:""};
+  const [form,setForm]=useState(vide);
+
+  const save=l=>{setEcritures(l);Store.set(KEY,l);};
+
+  const gl      = Compta.grandLivre(ecritures);
+  const bal     = Compta.balance(ecritures);
+  const res     = Compta.resultat(ecritures);
+  const bil     = Compta.bilan(ecritures);
+  const ctrl    = Compta.controles(ecritures);
+  const auto    = ecritures.filter(e=>e.auto).length;
+
+  const ajouter=()=>{
+    const e={};
+    if(!form.libelle.trim()) e.libelle="Libellé requis";
+    const d=Number(form.debit||0), c=Number(form.credit||0);
+    if(!d&&!c) e.debit="Saisissez un débit ou un crédit";
+    if(d&&c)   e.debit="Une ligne porte un débit OU un crédit, pas les deux";
+    if(!form.piece.trim()) e.piece="N° de pièce requis (obligatoire en OHADA)";
+    setErrors(e); if(Object.keys(e).length) return;
+    save([{...form,id:newId("ECR"),debit:d,credit:c},...ecritures]);
+    setForm({...vide,date:form.date}); setErrors({});
+    notify("✅ Écriture enregistrée");
+  };
+
+  const supprimer=(e)=>{
+    if(e.auto){ notify("⚠️ Écriture automatique — modifiez la pièce d'origine",T.accent); return; }
+    save(ecritures.filter(x=>x.id!==e.id)); notify("🗑 Supprimé",T.red);
+  };
+
+  const exporterCSV=()=>{
+    const esc=v=>`"${String(v==null?"":v).replace(/"/g,'""')}"`;
+    const L=[["Date","Piece","Compte","Intitule","Libelle","Debit","Credit"].join(";")];
+    [...ecritures].reverse().forEach(e=>L.push(
+      [e.date,e.piece||"",e.compte||"",libelleCompte(e.compte),e.libelle||"",Number(e.debit||0),Number(e.credit||0)].map(esc).join(";")));
+    L.push(["","","","","TOTAUX",bal.totaux.mvtDebit,bal.totaux.mvtCredit].map(esc).join(";"));
+    const blob=new Blob(["﻿"+L.join("\r\n")],{type:"text/csv;charset=utf-8;"});
+    const url=URL.createObjectURL(blob); const a=document.createElement("a");
+    a.href=url; a.download=`OHADA_${(user.entreprise||"AKILI").replace(/\W+/g,"_")}_${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+    notify("📤 Journal exporté");
+  };
+
+  const Ligne=({g,d,c,fort,accent})=>(
+    <div style={{display:"flex",justifyContent:"space-between",gap:9,padding:"7px 0",
+                 borderBottom:`1px solid ${T.border}`,fontSize:15,
+                 fontWeight:fort?700:400,color:accent||T.text}}>
+      <span style={{flex:1,minWidth:0}}>{g}</span>
+      {d!==undefined && <span style={{minWidth:92,textAlign:"right"}}>{d?fmtN(d):"—"}</span>}
+      {c!==undefined && <span style={{minWidth:92,textAlign:"right"}}>{c?fmtN(c):"—"}</span>}
+    </div>
+  );
+
+  const vues=[["journal","📔 Journal"],["gl","📚 Grand livre"],["balance","⚖️ Balance"],
+              ["resultat","📊 Résultat"],["bilan","🏛 Bilan"],["ctrl","🔍 Contrôles"],["export","📤 Export"]];
   const paginated=ecritures.slice(page*PP,(page+1)*PP);
+
   return(
-    <div style={{flex:1,overflowY:"auto",padding:17}}>
-      <div style={{display:"flex",gap:5,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
-        {[["journal","📔 Journal"],["resultat","📊 Résultat"],["bilan","⚖️ Bilan"]].map(([v,l])=>(<button key={v} onClick={()=>setView(v)} style={{background:view===v?T.accent:T.light,border:"none",borderRadius:6,padding:"5px 13px",color:view===v?"#000":T.muted,fontSize:14,cursor:"pointer",fontWeight:view===v?700:400,fontFamily:"inherit"}}>{l}</button>))}
-        <Btn sm onClick={()=>{setShow(!showForm);setErrors({});}} style={{marginLeft:"auto"}}>{showForm?"Fermer":"+ Écriture"}</Btn>
+    <div style={{flex:1,overflowY:"auto",padding:12}}>
+      <div style={{display:"flex",gap:6,marginBottom:12,overflowX:"auto",
+                   maskImage:"linear-gradient(90deg,#000 0,#000 calc(100% - 18px),transparent 100%)",
+                   WebkitMaskImage:"linear-gradient(90deg,#000 0,#000 calc(100% - 18px),transparent 100%)"}}>
+        {vues.map(([v,l])=>(
+          <Btn key={v} sm variant={view===v?"primary":"ghost"} onClick={()=>{setView(v);setCpt("");}}>{l}</Btn>
+        ))}
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:7,marginBottom:10}}>
-        <KPI icon="💚" label="Produits" value={`${fmtM(totalProd)}F`} color={T.green}/>
-        <KPI icon="🔴" label="Charges"  value={`${fmtM(totalCh)}F`}  color={T.red}/>
-        <KPI icon="📊" label={resultat>=0?"Bénéfice":"Déficit"} value={`${fmtM(Math.abs(resultat))}F`} color={resultat>=0?T.green:T.red}/>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:12}}>
+        <KPI icon="📔" label="Écritures" value={ecritures.length} sub={`${auto} automatique${auto>1?"s":""}`} color={T.accent}/>
+        <KPI icon="⚖️" label="Équilibre" value={bal.equilibree?"OK":fmtM(Math.abs(bal.totaux.mvtDebit-bal.totaux.mvtCredit))+"F"}
+             sub={bal.equilibree?"Débit = crédit":"À corriger"} color={bal.equilibree?T.green:T.red}/>
+        <KPI icon="📊" label="Résultat" value={fmtM(res.resultat)+"F"} sub={res.resultat>=0?"Bénéfice":"Perte"} color={res.resultat>=0?T.green:T.red}/>
+        <KPI icon="🏛" label="Total bilan" value={fmtM(bil.totalActif)+"F"}
+             sub={bil.equilibre?"Équilibré":"Écart "+fmtM(Math.abs(bil.ecart))+"F"} color={bil.equilibre?T.green:T.red}/>
       </div>
-      {showForm&&(<Card style={{marginBottom:11,padding:16}}><div style={{fontWeight:700,marginBottom:9,fontSize:17}}>Nouvelle écriture OHADA</div><Inp label="Date" value={form.date} onChange={v=>setForm({...form,date:v})} placeholder={today()}/><Inp label="Libellé" value={form.libelle} onChange={v=>{setForm({...form,libelle:v});setErrors(p=>({...p,libelle:""}));}} placeholder="Ex: Vente services digitaux" required error={errors.libelle}/><Sel label="Compte OHADA" value={form.compte} onChange={v=>setForm({...form,compte:v})} required options={COMPTES.map(c=>({value:c.code,label:`${c.code} — ${c.lib}`}))}/><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}><Inp label="Débit (FCFA)" value={form.debit} onChange={v=>{setForm({...form,debit:v,credit:""});setErrors(p=>({...p,montant:""}));}} placeholder="0"/><Inp label="Crédit (FCFA)" value={form.credit} onChange={v=>{setForm({...form,credit:v,debit:""});setErrors(p=>({...p,montant:""}));}} placeholder="0"/></div>{errors.montant&&<div style={{fontSize:14,color:T.red,marginTop:-6,marginBottom:8}}>⚠ {errors.montant}</div>}<Inp label="N° pièce" value={form.piece} onChange={v=>setForm({...form,piece:v})} placeholder="FAC-2026-001"/><div style={{padding:"8px 12px",background:T.accent+"12",border:`1px solid ${T.accent}22`,borderRadius:7,fontSize:13,color:T.accent,marginBottom:9}}>💡 OHADA : pièce justificative obligatoire. Faites vérifier par un expert-comptable ONECCA-CI.</div><Btn onClick={add} full style={{padding:13}}>✓ Enregistrer</Btn></Card>)}
-      {view==="journal"&&(<>{paginated.length===0?(<div style={{textAlign:"center",padding:"22px 0",color:T.muted}}><div style={{fontSize:30,marginBottom:8}}>📒</div><div style={{fontSize:16}}>Aucune écriture</div></div>):paginated.map(e=>(<Card key={e.id} style={{marginBottom:6,padding:13}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div style={{flex:1}}><div style={{fontWeight:700,fontSize:16}}>{e.libelle}</div><div style={{fontSize:13,color:T.muted}}>{e.date} · Cpt {e.compte}{e.piece&&` · ${e.piece}`}</div></div><div style={{textAlign:"right",marginLeft:8}}>{e.debit&&<div style={{fontSize:15,fontWeight:700,color:T.red}}>D: {fmtN(e.debit)}F</div>}{e.credit&&<div style={{fontSize:15,fontWeight:700,color:T.green}}>C: {fmtN(e.credit)}F</div>}</div><button onClick={()=>del(e.id)} style={{background:"none",border:"none",color:T.red,cursor:"pointer",fontSize:16,marginLeft:5}}>🗑</button></div></Card>))}<Pager total={ecritures.length} page={page} pp={PP} onPage={setPage}/></>)}
-      {view==="resultat"&&(<Card style={{padding:17}}><div style={{fontSize:15,fontWeight:700,marginBottom:10,color:T.muted}}>COMPTE DE RÉSULTAT — OHADA</div>{[["Produits d'exploitation (Cl.7)",totalProd,T.green],["Charges d'exploitation (Cl.6)",totalCh,T.red]].map(([l,v,c])=>(<div key={l} style={{display:"flex",justifyContent:"space-between",padding:"9px 0",borderBottom:`1px solid ${T.border}`}}><span style={{fontSize:15,color:T.muted}}>{l}</span><span style={{fontWeight:700,color:c,fontSize:16}}>{fmtN(v)} F</span></div>))}<div style={{display:"flex",justifyContent:"space-between",padding:"12px 0",borderTop:`2px solid ${T.accent}`,marginTop:3}}><span style={{fontSize:17,fontWeight:800}}>{resultat>=0?"✅ BÉNÉFICE":"❌ DÉFICIT"}</span><span style={{fontSize:19,fontWeight:900,color:resultat>=0?T.green:T.red}}>{fmtN(Math.abs(resultat))} F</span></div>{ecritures.length===0&&<div style={{textAlign:"center",padding:"13px 0",color:T.muted,fontSize:15}}>Ajoutez des écritures pour voir le résultat</div>}<div style={{padding:"9px 12px",background:T.accent+"12",border:`1px solid ${T.accent}22`,borderRadius:7,fontSize:13,color:T.muted,marginTop:8}}>⚠️ Indicatif. Faites certifier par un expert-comptable agréé ONECCA-CI.</div></Card>)}
-      {view==="bilan"&&(<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}>{[["ACTIF",T.blue,[["521","Banque"],["571","Caisse"],["411","Clients"],["2","Immobilis."]]],["PASSIF",T.red,[["101","Capital"],["130","Résultat"],["401","Fourn."],["447","TVA due"]]]].map(([titre,c,items])=>(<Card key={titre} style={{padding:14}}><div style={{fontSize:15,fontWeight:800,color:c,marginBottom:7}}>{titre}</div>{items.map(([code,lib],i)=>{const val=ecritures.filter(e=>e.compte?.startsWith(code)).reduce((s,e)=>s+Number(e.debit||0)-Number(e.credit||0),0);return(<div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:`1px solid ${T.border}`,fontSize:13}}><span style={{color:T.muted}}>{code} {lib}</span><span style={{fontWeight:700,color:Math.abs(val)>0?c:T.muted}}>{Math.abs(val)>0?`${fmtN(Math.abs(val))}F`:"—"}</span></div>);})}</Card>))}</div>)}
+
+      {/* ── JOURNAL ── */}
+      {view==="journal" && <>
+        <Card style={{marginBottom:12}}>
+          <div style={{fontSize:16,fontWeight:700,color:T.text,marginBottom:10}}>Écriture manuelle</div>
+          <div style={{fontSize:14,color:T.muted,marginBottom:10,lineHeight:1.6}}>
+            Les ventes, achats et bulletins de paie créent leurs écritures tout seuls.
+            Ce formulaire sert aux opérations qui n'ont pas de pièce dans l'application :
+            apport en capital, frais bancaires, virement entre caisse et banque.
+          </div>
+          <Inp label="Date" value={form.date} onChange={v=>setForm({...form,date:v})} placeholder="JJ/MM/AAAA"/>
+          <Inp label="Libellé" required value={form.libelle} onChange={v=>setForm({...form,libelle:v})} placeholder="Apport en capital" error={errors.libelle}/>
+          <Sel label="Compte" required value={form.compte} onChange={v=>setForm({...form,compte:v})}
+               options={Object.keys(PLAN_OHADA).map(c=>({value:c,label:`${c} — ${PLAN_OHADA[c]}`}))}/>
+          <div style={{display:"flex",gap:9}}>
+            <div style={{flex:1}}><Inp label="Débit" value={form.debit} onChange={v=>setForm({...form,debit:v,credit:v?"":form.credit})} placeholder="0" error={errors.debit}/></div>
+            <div style={{flex:1}}><Inp label="Crédit" value={form.credit} onChange={v=>setForm({...form,credit:v,debit:v?"":form.debit})} placeholder="0"/></div>
+          </div>
+          <Inp label="N° de pièce" required value={form.piece} onChange={v=>setForm({...form,piece:v})} placeholder="PC-2026-001" error={errors.piece}/>
+          <Btn full onClick={ajouter}>✓ Enregistrer</Btn>
+        </Card>
+
+        {!ecritures.length
+          ? <Card style={{textAlign:"center",padding:26,color:T.muted,fontSize:15}}>
+              Aucune écriture.<br/>Enregistrez une vente ou un achat : la comptabilité se remplira d'elle-même.
+            </Card>
+          : paginated.map(e=>(
+            <Card key={e.id} style={{marginBottom:6,padding:13}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:9}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:700,fontSize:16,color:T.text}}>{e.libelle}</div>
+                  <div style={{fontSize:13,color:T.muted,marginTop:2}}>
+                    {e.date} · {e.compte} {libelleCompte(e.compte)}{e.piece?` · ${e.piece}`:""}
+                    {e.auto && <span style={{color:T.accent}}> · auto</span>}
+                  </div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  {!!Number(e.debit) && <div style={{fontSize:15,fontWeight:700,color:T.text}}>D {fmtN(e.debit)}</div>}
+                  {!!Number(e.credit)&& <div style={{fontSize:15,fontWeight:700,color:T.muted}}>C {fmtN(e.credit)}</div>}
+                </div>
+                <button onClick={()=>supprimer(e)} style={{background:"none",border:"none",color:e.auto?T.border:T.red,cursor:"pointer",fontSize:16}}>🗑</button>
+              </div>
+            </Card>))}
+        <Pager total={ecritures.length} page={page} pp={PP} onPage={setPage}/>
+      </>}
+
+      {/* ── GRAND LIVRE ── */}
+      {view==="gl" && <>
+        {!cpt
+          ? (!gl.length
+              ? <Card style={{textAlign:"center",padding:26,color:T.muted,fontSize:15}}>Aucun compte mouvementé.</Card>
+              : gl.map(g=>(
+                <Card key={g.compte} style={{marginBottom:6,padding:13,cursor:"pointer"}} onClick={()=>setCpt(g.compte)}>
+                  <div style={{display:"flex",justifyContent:"space-between",gap:9,alignItems:"center"}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:16,fontWeight:700,color:T.text}}>{g.compte} — {g.libelle}</div>
+                      <div style={{fontSize:13,color:T.muted,marginTop:2}}>{g.lignes.length} mouvement(s)</div>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontSize:16,fontWeight:800,color:g.solde>=0?T.text:T.muted}}>
+                        {fmtN(Math.abs(g.solde))} F
+                      </div>
+                      <div style={{fontSize:13,color:T.muted}}>{g.solde>=0?"débiteur":"créditeur"}</div>
+                    </div>
+                  </div>
+                </Card>)))
+          : (()=>{
+              const g=gl.find(x=>x.compte===cpt);
+              if(!g) return null;
+              return(
+                <Card>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                    <div style={{fontSize:17,fontWeight:700,color:T.text}}>{g.compte} — {g.libelle}</div>
+                    <Btn sm variant="ghost" onClick={()=>setCpt("")}>← Comptes</Btn>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",gap:9,fontSize:13,color:T.muted,
+                               paddingBottom:5,borderBottom:`1px solid ${T.border}`,fontWeight:700}}>
+                    <span style={{flex:1}}>Date · Libellé</span>
+                    <span style={{minWidth:80,textAlign:"right"}}>Débit</span>
+                    <span style={{minWidth:80,textAlign:"right"}}>Crédit</span>
+                    <span style={{minWidth:88,textAlign:"right"}}>Solde</span>
+                  </div>
+                  {g.lignes.map((l,i)=>(
+                    <div key={i} style={{display:"flex",justifyContent:"space-between",gap:9,padding:"8px 0",
+                                         borderBottom:`1px solid ${T.border}`,fontSize:14}}>
+                      <span style={{flex:1,minWidth:0,color:T.text}}>
+                        <span style={{color:T.muted}}>{l.date}</span> {l.libelle}
+                      </span>
+                      <span style={{minWidth:80,textAlign:"right",color:T.text}}>{l.debit?fmtN(l.debit):"—"}</span>
+                      <span style={{minWidth:80,textAlign:"right",color:T.muted}}>{l.credit?fmtN(l.credit):"—"}</span>
+                      <span style={{minWidth:88,textAlign:"right",fontWeight:700,color:l.solde>=0?T.text:T.muted}}>{fmtN(Math.abs(l.solde))}</span>
+                    </div>
+                  ))}
+                  <div style={{display:"flex",justifyContent:"space-between",gap:9,paddingTop:9,fontSize:15,fontWeight:800,color:T.accent}}>
+                    <span style={{flex:1}}>Totaux</span>
+                    <span style={{minWidth:80,textAlign:"right"}}>{fmtN(g.debit)}</span>
+                    <span style={{minWidth:80,textAlign:"right"}}>{fmtN(g.credit)}</span>
+                    <span style={{minWidth:88,textAlign:"right"}}>{fmtN(Math.abs(g.solde))} {g.solde>=0?"D":"C"}</span>
+                  </div>
+                </Card>
+              );
+            })()}
+      </>}
+
+      {/* ── BALANCE ── */}
+      {view==="balance" && <Card>
+        <div style={{fontSize:17,fontWeight:700,color:T.text,marginBottom:4}}>Balance générale</div>
+        <div style={{fontSize:14,color:T.muted,marginBottom:12}}>Mouvements et soldes par compte</div>
+        {!bal.lignes.length && <div style={{textAlign:"center",padding:20,color:T.muted,fontSize:15}}>Aucun compte mouvementé.</div>}
+        {bal.lignes.map(l=>(
+          <div key={l.compte} style={{padding:"8px 0",borderBottom:`1px solid ${T.border}`}}>
+            <div style={{fontSize:15,fontWeight:700,color:T.text}}>{l.compte} — {l.libelle}</div>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:T.muted,marginTop:3}}>
+              <span>Mvt D {fmtN(l.mvtDebit)} · C {fmtN(l.mvtCredit)}</span>
+              <span style={{color:T.text,fontWeight:700}}>
+                {l.soldeDebiteur?`${fmtN(l.soldeDebiteur)} D`:`${fmtN(l.soldeCrediteur)} C`}
+              </span>
+            </div>
+          </div>
+        ))}
+        {!!bal.lignes.length && <div style={{marginTop:12,paddingTop:10,borderTop:`2px solid ${T.accent}`}}>
+          <Ligne g="Totaux mouvements" d={bal.totaux.mvtDebit} c={bal.totaux.mvtCredit} fort accent={T.accent}/>
+          <Ligne g="Totaux soldes"     d={bal.totaux.soldeDebiteur} c={bal.totaux.soldeCrediteur} fort accent={T.accent}/>
+          <div style={{marginTop:9,fontSize:14,color:bal.equilibree?T.green:T.red,fontWeight:700}}>
+            {bal.equilibree?"✓ Balance équilibrée":"✗ Balance déséquilibrée — voir Contrôles"}
+          </div>
+        </div>}
+      </Card>}
+
+      {/* ── COMPTE DE RÉSULTAT ── */}
+      {view==="resultat" && <Card>
+        <div style={{fontSize:17,fontWeight:700,color:T.text,marginBottom:12}}>Compte de résultat</div>
+        <div style={{fontSize:15,fontWeight:700,color:T.accent,marginTop:6,marginBottom:4}}>Produits (classe 7)</div>
+        {res.produits.length?res.produits.map(x=><Ligne key={x.compte} g={`${x.compte} — ${x.libelle}`} c={x.montant}/>)
+          :<div style={{fontSize:14,color:T.muted,padding:"6px 0"}}>Aucun produit enregistré.</div>}
+        <Ligne g="Total produits" c={res.totalProduits} fort accent={T.accent}/>
+
+        <div style={{fontSize:15,fontWeight:700,color:T.accent,marginTop:14,marginBottom:4}}>Charges (classe 6)</div>
+        {res.charges.length?res.charges.map(x=><Ligne key={x.compte} g={`${x.compte} — ${x.libelle}`} d={x.montant}/>)
+          :<div style={{fontSize:14,color:T.muted,padding:"6px 0"}}>Aucune charge enregistrée.</div>}
+        <Ligne g="Total charges" d={res.totalCharges} fort accent={T.accent}/>
+
+        <div style={{marginTop:14,padding:14,borderRadius:9,
+                     background:(res.resultat>=0?T.green:T.red)+"12",
+                     border:`1px solid ${(res.resultat>=0?T.green:T.red)}33`}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:17,fontWeight:800,
+                       color:res.resultat>=0?T.green:T.red}}>
+            <span>{res.resultat>=0?"Bénéfice net":"Perte nette"}</span>
+            <span>{fmtN(Math.abs(res.resultat))} F</span>
+          </div>
+          <div style={{fontSize:13,color:T.muted,marginTop:5}}>
+            Reporté automatiquement au passif du bilan, compte 120.
+          </div>
+        </div>
+      </Card>}
+
+      {/* ── BILAN ── */}
+      {view==="bilan" && <Card>
+        <div style={{fontSize:17,fontWeight:700,color:T.text,marginBottom:4}}>Bilan</div>
+        <div style={{fontSize:14,color:T.muted,marginBottom:12}}>Au {today()} · SYSCOHADA révisé</div>
+
+        <div style={{fontSize:15,fontWeight:700,color:T.accent,marginBottom:4}}>ACTIF</div>
+        {bil.actif.length?bil.actif.map(s=>(
+          <div key={s.section} style={{marginBottom:9}}>
+            <div style={{fontSize:14,color:T.muted,marginTop:7}}>{s.section}</div>
+            {s.lignes.map(l=><Ligne key={l.compte} g={`${l.compte} — ${l.libelle}`} d={s.negatif?-l.montant:l.montant}/>)}
+          </div>
+        )):<div style={{fontSize:14,color:T.muted,padding:"6px 0"}}>Actif vide.</div>}
+        <Ligne g="TOTAL ACTIF" d={bil.totalActif} fort accent={T.accent}/>
+
+        <div style={{fontSize:15,fontWeight:700,color:T.accent,marginTop:16,marginBottom:4}}>PASSIF</div>
+        {bil.passif.map(s=>(
+          <div key={s.section} style={{marginBottom:9}}>
+            <div style={{fontSize:14,color:T.muted,marginTop:7}}>{s.section}</div>
+            {s.lignes.map(l=><Ligne key={l.compte} g={`${l.compte} — ${l.libelle}`} c={l.montant}/>)}
+          </div>
+        ))}
+        <div style={{fontSize:14,color:T.muted,marginTop:7}}>Résultat de l'exercice</div>
+        <Ligne g="120 — Résultat net" c={bil.resultat}/>
+        <Ligne g="TOTAL PASSIF" c={bil.totalPassif} fort accent={T.accent}/>
+
+        <div style={{marginTop:14,padding:12,borderRadius:9,
+                     background:(bil.equilibre?T.green:T.red)+"12",
+                     border:`1px solid ${(bil.equilibre?T.green:T.red)}33`,fontSize:15,
+                     color:bil.equilibre?T.green:T.red,fontWeight:700}}>
+          {bil.equilibre
+            ? "✓ Bilan équilibré — actif = passif"
+            : `✗ Écart de ${fmtN(Math.abs(bil.ecart))} F entre actif et passif`}
+        </div>
+      </Card>}
+
+      {/* ── CONTRÔLES ── */}
+      {view==="ctrl" && <Card>
+        <div style={{fontSize:17,fontWeight:700,color:T.text,marginBottom:4}}>Contrôles de cohérence</div>
+        <div style={{fontSize:14,color:T.muted,marginBottom:12,lineHeight:1.6}}>
+          Ce qu'un expert-comptable vérifie avant d'accepter un dossier.
+        </div>
+        {ctrl.map((x,i)=>{
+          const col=x.n==="err"?T.red:x.n==="warn"?T.accent:x.n==="ok"?T.green:T.muted;
+          const ic =x.n==="err"?"✗":x.n==="warn"?"⚠️":x.n==="ok"?"✓":"ℹ️";
+          return(
+            <div key={i} style={{display:"flex",gap:9,padding:11,marginBottom:7,borderRadius:8,
+                                 background:col+"12",border:`1px solid ${col}33`}}>
+              <span style={{color:col,fontSize:15}}>{ic}</span>
+              <span style={{fontSize:15,color:T.text,lineHeight:1.55}}>{x.m}</span>
+            </div>
+          );
+        })}
+        <div style={{fontSize:13,color:T.muted,marginTop:10,lineHeight:1.6}}>
+          Ces contrôles sont mécaniques. Ils ne remplacent pas la validation d'un
+          expert-comptable agréé ONECCA-CI, qui seul engage sa responsabilité.
+        </div>
+      </Card>}
+
+      {/* ── EXPORT ── */}
+      {view==="export" && <Card>
+        <div style={{fontSize:17,fontWeight:700,color:T.text,marginBottom:6}}>Export CSV OHADA</div>
+        <div style={{fontSize:15,color:T.muted,lineHeight:1.65,marginBottom:12}}>
+          Un fichier que votre expert-comptable ouvre dans Excel ou importe dans son logiciel.
+          Colonnes : date, pièce, compte, intitulé, libellé, débit, crédit.
+        </div>
+        {!bal.equilibree && <div style={{padding:12,marginBottom:12,borderRadius:8,
+             background:T.red+"12",border:`1px solid ${T.red}33`,fontSize:14,color:T.text,lineHeight:1.6}}>
+          ⚠️ <b style={{color:T.red}}>Journal déséquilibré</b> de {fmtN(Math.abs(bal.totaux.mvtDebit-bal.totaux.mvtCredit))} F.
+          L'export reste possible, mais votre comptable refusera un journal dans cet état. Voir l'onglet Contrôles.
+        </div>}
+        <Btn full disabled={!ecritures.length} onClick={exporterCSV}>
+          📤 Télécharger le journal ({ecritures.length} écriture{ecritures.length>1?"s":""})
+        </Btn>
+        <div style={{fontSize:13,color:T.muted,marginTop:10,lineHeight:1.6}}>
+          Rappel : ces écritures sont indicatives. Faites-les valider par un expert-comptable
+          agréé ONECCA-CI avant tout dépôt auprès de la DGI.
+        </div>
+      </Card>}
     </div>
   );
 }
 
-// ─── CHAT TAB ─────────────────────────────────────────────────────
 function ChatTab({user,plan,notify,onUpgrade}){
   const HIST=`akili_chat_${user.uid}`;
   const [msgs,setMsgs]=useState(()=>Store.get(HIST,[{role:"assistant",content:`Bonjour **${user.name}** ! 🌍 Expert OHADA, stocks, RH et business.\n⚠️ *Mes réponses sont indicatives.*\nQue puis-je faire pour vous ?`}]));
@@ -1411,6 +1955,501 @@ function ChatTab({user,plan,notify,onUpgrade}){
           style={{flex:1,background:T.bg,border:`1px solid ${T.border}`,borderRadius:18,padding:"9px 17px",color:T.text,fontSize:15,outline:"none",fontFamily:"inherit"}}/>
         <button onClick={send} disabled={loading} style={{width:42,height:42,borderRadius:"50%",background:loading?T.border:`linear-gradient(135deg,${T.accent},${T.accentD})`,border:"none",cursor:loading?"not-allowed":"pointer",fontSize:17}}>➤</button>
       </div>
+    </div>
+  );
+}
+
+// ─── ACHATS & FOURNISSEURS ────────────────────────────────────────
+// Promis dans le Starter gratuit sur akili.africavit.com.
+// Rattaché au plan comptable OHADA : 401 Fournisseurs, 601 Achats.
+function AchatsTab({orgId,user,notify}){
+  const FOURN=`akili_fourn_${orgId}`, ACH=`akili_achats_${orgId}`, ECR=`akili_ecrit_${orgId}`;
+  const [view,setView]=useState("achats");
+  const [fourn,setFourn]=useState(()=>Store.get(FOURN,[]));
+  const [achats,setAchats]=useState(()=>Store.get(ACH,[]));
+  const [page,setPage]=useState(0); const PP=10;
+  const [errors,setErrors]=useState({});
+  const vide={date:today(),fournisseur:"",designation:"",montantHT:"",tva:"18",statut:"En attente",piece:""};
+  const [form,setForm]=useState(vide);
+  const videF={nom:"",contact:"",tel:"",email:"",compte:"401",notes:""};
+  const [formF,setFormF]=useState(videF);
+
+  const saveF=l=>{setFourn(l);Store.set(FOURN,l);};
+  const saveA=l=>{setAchats(l);Store.set(ACH,l);};
+
+  const ttc=a=>Math.round(Number(a.montantHT||0)*(1+Number(a.tva||0)/100));
+  const totalTTC  = achats.reduce((s,a)=>s+ttc(a),0);
+  const totalImpaye = achats.filter(a=>a.statut!=="Payé").reduce((s,a)=>s+ttc(a),0);
+  const totalTVA  = achats.reduce((s,a)=>s+Math.round(Number(a.montantHT||0)*Number(a.tva||0)/100),0);
+
+  const validerAchat=()=>{
+    const e={};
+    if(!form.fournisseur) e.fournisseur="Fournisseur requis";
+    if(!form.designation.trim()) e.designation="Désignation requise";
+    if(!form.montantHT||isNaN(Number(form.montantHT))||Number(form.montantHT)<=0) e.montantHT="Montant invalide";
+    setErrors(e); return !Object.keys(e).length;
+  };
+  const ajouterAchat=()=>{
+    if(!validerAchat()) return;
+    const a={...form,id:newId("ACH"),creeLe:today()};
+    saveA([a,...achats]);
+    comptabiliser(a);                    // automatique, sans clic
+    setForm(vide); setErrors({}); setView("achats");
+    notify("✅ Achat enregistré · écritures OHADA créées");
+  };
+
+  const validerFourn=()=>{
+    const e={};
+    if(!formF.nom.trim()) e.nom="Nom requis";
+    if(formF.email&&!/\S+@\S+\.\S+/.test(formF.email)) e.email="Email invalide";
+    setErrors(e); return !Object.keys(e).length;
+  };
+  const ajouterFourn=()=>{
+    if(!validerFourn()) return;
+    saveF([{...formF,id:newId("FRN"),creeLe:today()},...fourn]);
+    setFormF(videF); setErrors({}); setView("fournisseurs");
+    notify("✅ Fournisseur ajouté");
+  };
+
+  // Comptabilisation automatique : charge au débit, TVA déductible au
+  // débit, dette fournisseur au crédit. Reposter le même achat remplace
+  // ses écritures au lieu d'en créer de nouvelles.
+  const comptabiliser=(a)=>{
+    posterEcritures(orgId,a.id,ecrituresAchat({
+      date:a.date, libelle:`Achat ${a.designation} — ${a.fournisseur}`,
+      piece:a.piece||a.id, montantHT:Number(a.montantHT||0), tauxTVA:Number(a.tva||0),
+      compteCharge:"601",
+    }));
+  };
+
+  // Le règlement est une opération distincte : la dette s'éteint, la
+  // trésorerie diminue. On ne réécrit pas la facture d'origine.
+  const reglerAchat=(a)=>{
+    saveA(achats.map(x=>x.id===a.id?{...x,statut:"Payé"}:x));
+    posterEcritures(orgId,a.id+"-reg",[
+      {date:today(),libelle:`Règlement ${a.fournisseur}`,piece:a.piece||a.id,compte:"401",debit:ttc(a),credit:0},
+      {date:today(),libelle:`Règlement ${a.fournisseur}`,piece:a.piece||a.id,compte:"521",debit:0,credit:ttc(a)},
+    ]);
+    notify("✅ Réglé · écriture de trésorerie créée");
+  };
+
+  const supprimerAchat=(a)=>{
+    saveA(achats.filter(x=>x.id!==a.id));
+    retirerEcritures(orgId,a.id);
+    retirerEcritures(orgId,a.id+"-reg");
+    notify("🗑 Achat et ses écritures supprimés",T.red);
+  };
+
+  const sc=s=>s==="Payé"?T.green:s==="En attente"?T.accent:T.muted;
+  const vus=achats.slice(page*PP,(page+1)*PP);
+
+  return(
+    <div style={{flex:1,overflowY:"auto",padding:12}}>
+      <div style={{display:"flex",gap:6,marginBottom:12,overflowX:"auto"}}>
+        {[["achats","🧾 Achats"],["fournisseurs","🏭 Fournisseurs"],["form","➕ Achat"],["formF","➕ Fournisseur"]].map(([v,l])=>(
+          <Btn key={v} sm variant={view===v?"primary":"ghost"} onClick={()=>{setView(v);setErrors({});}}>{l}</Btn>
+        ))}
+      </div>
+
+      {view==="achats" && <>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:12}}>
+          <KPI icon="🧾" label="Total achats"  value={fmtM(totalTTC)+"F"}    sub={achats.length+" achat(s)"} color={T.accent}/>
+          <KPI icon="⏳" label="Impayés"       value={fmtM(totalImpaye)+"F"} sub="À régler"                  color={totalImpaye>0?T.red:T.green}/>
+          <KPI icon="🏭" label="Fournisseurs"  value={fourn.length}          sub="Référencés"                color={T.blue}/>
+          <KPI icon="🧮" label="TVA déductible" value={fmtM(totalTVA)+"F"}   sub="Sur achats"                color={T.muted}/>
+        </div>
+        {!achats.length && <Card style={{textAlign:"center",padding:26,color:T.muted,fontSize:15}}>
+          Aucun achat enregistré.<br/>Commencez par ajouter un fournisseur, puis saisissez vos factures d'achat.
+        </Card>}
+        {vus.map(a=>(
+          <Card key={a.id} style={{marginBottom:9}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:9}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:16,fontWeight:700,color:T.text}}>{a.designation}</div>
+                <div style={{fontSize:14,color:T.muted,marginTop:2}}>{a.fournisseur} · {a.date}{a.piece?` · pièce ${a.piece}`:""}</div>
+              </div>
+              <Badge label={a.statut} color={sc(a.statut)}/>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:9,paddingTop:9,borderTop:`1px solid ${T.border}`}}>
+              <div style={{fontSize:14,color:T.muted}}>
+                HT {fmtN(a.montantHT)} · TVA {a.tva}% · <b style={{color:T.text}}>TTC {fmtN(ttc(a))} F</b>
+              </div>
+              <div style={{display:"flex",gap:5}}>
+                {a.statut!=="Payé" && <Btn sm variant="green" onClick={()=>reglerAchat(a)}>Régler</Btn>}
+                <span style={{fontSize:13,color:T.green,alignSelf:"center"}}>📒 Comptabilisé</span>
+                <Btn sm variant="danger" onClick={()=>supprimerAchat(a)}>🗑</Btn>
+              </div>
+            </div>
+          </Card>
+        ))}
+        <Pager total={achats.length} page={page} pp={PP} onPage={setPage}/>
+      </>}
+
+      {view==="fournisseurs" && <>
+        {!fourn.length && <Card style={{textAlign:"center",padding:26,color:T.muted,fontSize:15}}>
+          Aucun fournisseur. Ajoutez-en un pour pouvoir saisir vos achats.
+        </Card>}
+        {fourn.map(f=>(
+          <Card key={f.id} style={{marginBottom:9}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:9}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:16,fontWeight:700,color:T.text}}>{f.nom}</div>
+                <div style={{fontSize:14,color:T.muted,marginTop:2}}>
+                  {[f.contact,f.tel,f.email].filter(Boolean).join(" · ")||"—"}
+                </div>
+                <div style={{fontSize:13,color:T.muted,marginTop:3}}>Compte OHADA {f.compte}</div>
+                {f.notes && <div style={{fontSize:14,color:T.text,marginTop:5}}>{f.notes}</div>}
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                {f.tel && <Btn sm variant="ghost" onClick={()=>window.open(`https://wa.me/${f.tel.replace(/\D/g,"")}`,"_blank")}>📲</Btn>}
+                <Btn sm variant="danger" onClick={()=>{saveF(fourn.filter(x=>x.id!==f.id));notify("🗑 Supprimé",T.red);}}>🗑</Btn>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </>}
+
+      {view==="form" && <Card>
+        <div style={{fontSize:17,fontWeight:700,color:T.text,marginBottom:12}}>Nouvel achat</div>
+        <Inp label="Date" value={form.date} onChange={v=>setForm({...form,date:v})} placeholder="JJ/MM/AAAA"/>
+        <Sel label="Fournisseur" required value={form.fournisseur} onChange={v=>setForm({...form,fournisseur:v})}
+             options={[{value:"",label:fourn.length?"— Choisir —":"— Ajoutez d'abord un fournisseur —"},...fourn.map(f=>({value:f.nom,label:f.nom}))]}/>
+        {errors.fournisseur && <div style={{color:T.red,fontSize:14,marginTop:-6,marginBottom:9}}>{errors.fournisseur}</div>}
+        <Inp label="Désignation" required value={form.designation} onChange={v=>setForm({...form,designation:v})} placeholder="Ciment, carburant, fournitures..." error={errors.designation}/>
+        <Inp label="Montant HT (FCFA)" required value={form.montantHT} onChange={v=>setForm({...form,montantHT:v})} placeholder="250000" error={errors.montantHT}/>
+        <Sel label="TVA" value={form.tva} onChange={v=>setForm({...form,tva:v})}
+             options={[{value:"18",label:"18 % — taux normal"},{value:"9",label:"9 % — taux réduit"},{value:"0",label:"0 % — exonéré"}]}/>
+        <Sel label="Statut" value={form.statut} onChange={v=>setForm({...form,statut:v})}
+             options={["En attente","Payé"]}/>
+        <Inp label="N° de pièce" value={form.piece} onChange={v=>setForm({...form,piece:v})} placeholder="FACT-FRN-001"/>
+        <div style={{padding:12,background:T.accentG,border:`1px solid ${T.accent}33`,borderRadius:8,fontSize:14,color:T.text,marginBottom:12,lineHeight:1.6}}>
+          💡 Montant TTC : <b>{fmtN(ttc(form))} FCFA</b> — dont {fmtN(Math.round(Number(form.montantHT||0)*Number(form.tva||0)/100))} F de TVA déductible.
+        </div>
+        <Btn full onClick={ajouterAchat}>✓ Enregistrer l'achat</Btn>
+      </Card>}
+
+      {view==="formF" && <Card>
+        <div style={{fontSize:17,fontWeight:700,color:T.text,marginBottom:12}}>Nouveau fournisseur</div>
+        <Inp label="Nom" required value={formF.nom} onChange={v=>setFormF({...formF,nom:v})} placeholder="CIMAF Côte d'Ivoire" error={errors.nom}/>
+        <Inp label="Contact" value={formF.contact} onChange={v=>setFormF({...formF,contact:v})} placeholder="Nom du commercial"/>
+        <Inp label="Téléphone" value={formF.tel} onChange={v=>setFormF({...formF,tel:v})} placeholder="225XXXXXXXX"/>
+        <Inp label="Email" value={formF.email} onChange={v=>setFormF({...formF,email:v})} placeholder="contact@fournisseur.ci" error={errors.email}/>
+        <Sel label="Compte OHADA" value={formF.compte} onChange={v=>setFormF({...formF,compte:v})}
+             options={[{value:"401",label:"401 — Fournisseurs"},{value:"402",label:"402 — Fournisseurs, effets à payer"},{value:"408",label:"408 — Fournisseurs, factures non parvenues"}]}/>
+        <Inp label="Notes" value={formF.notes} onChange={v=>setFormF({...formF,notes:v})} placeholder="Délai de livraison, conditions..."/>
+        <Btn full onClick={ajouterFourn}>✓ Ajouter le fournisseur</Btn>
+      </Card>}
+    </div>
+  );
+}
+
+// ─── PROJETS (Kanban) ─────────────────────────────────────────────
+// Promis dans le Business sur akili.africavit.com.
+// Déplacement par boutons ← → plutôt que par glisser-déposer : sur un
+// écran tactile, le glissé entre colonnes se confond avec le défilement.
+function ProjetsTab({orgId,user,notify}){
+  const KEY=`akili_projets_${orgId}`, CLI=`akili_clients_${orgId}`;
+  const COLONNES=[
+    {id:"afaire",  label:"À faire",  icon:"📋", color:T.muted},
+    {id:"encours", label:"En cours", icon:"🚧", color:T.accent},
+    {id:"termine", label:"Terminé",  icon:"✅", color:T.green},
+  ];
+  const [projets,setProjets]=useState(()=>Store.get(KEY,[]));
+  const [view,setView]=useState("kanban");
+  const [col,setCol]=useState("encours");
+  const [errors,setErrors]=useState({});
+  const vide={nom:"",client:"",budget:"",echeance:"",avancement:"0",colonne:"afaire",notes:""};
+  const [form,setForm]=useState(vide);
+  const clients=Store.get(CLI,[]);
+
+  const save=l=>{setProjets(l);Store.set(KEY,l);};
+  const deplacer=(p,sens)=>{
+    const i=COLONNES.findIndex(c=>c.id===p.colonne);
+    const j=Math.min(COLONNES.length-1,Math.max(0,i+sens));
+    if(i===j) return;
+    const maj={...p,colonne:COLONNES[j].id};
+    if(COLONNES[j].id==="termine") maj.avancement="100";
+    if(COLONNES[j].id==="afaire"&&p.avancement==="100") maj.avancement="0";
+    save(projets.map(x=>x.id===p.id?maj:x));
+    notify(`→ ${COLONNES[j].label}`);
+  };
+
+  const valider=()=>{
+    const e={};
+    if(!form.nom.trim()) e.nom="Nom requis";
+    if(form.budget&&(isNaN(Number(form.budget))||Number(form.budget)<0)) e.budget="Montant invalide";
+    const a=Number(form.avancement);
+    if(isNaN(a)||a<0||a>100) e.avancement="Entre 0 et 100";
+    setErrors(e); return !Object.keys(e).length;
+  };
+  const ajouter=()=>{
+    if(!valider()) return;
+    save([{...form,id:newId("PRJ"),creeLe:today()},...projets]);
+    setForm(vide); setErrors({}); setView("kanban");
+    notify("✅ Projet créé");
+  };
+
+  // Retard : échéance dépassée et projet non terminé
+  const enRetard=p=>{
+    if(!p.echeance||p.colonne==="termine") return false;
+    const [j,m,a]=p.echeance.split("/");
+    if(!a) return false;
+    return new Date(`${a}-${m}-${j}`) < new Date(new Date().toDateString());
+  };
+
+  const budgetTotal  = projets.reduce((s,p)=>s+Number(p.budget||0),0);
+  const budgetEnCours= projets.filter(p=>p.colonne==="encours").reduce((s,p)=>s+Number(p.budget||0),0);
+  const retards      = projets.filter(enRetard).length;
+
+  const Carte=({p})=>{
+    const i=COLONNES.findIndex(c=>c.id===p.colonne);
+    const retard=enRetard(p);
+    return(
+      <Card style={{marginBottom:9,border:`1px solid ${retard?T.red+"55":T.border}`}}>
+        <div style={{display:"flex",justifyContent:"space-between",gap:9}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:16,fontWeight:700,color:T.text}}>{p.nom}</div>
+            {p.client && <div style={{fontSize:14,color:T.muted,marginTop:2}}>👥 {p.client}</div>}
+          </div>
+          {retard && <Badge label="En retard" color={T.red}/>}
+        </div>
+
+        <div style={{marginTop:9}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:T.muted,marginBottom:4}}>
+            <span>Avancement</span><span style={{color:T.text,fontWeight:700}}>{p.avancement}%</span>
+          </div>
+          <div style={{height:6,background:T.light,borderRadius:3,overflow:"hidden"}}>
+            <div style={{width:`${Math.min(100,Number(p.avancement||0))}%`,height:"100%",
+                         background:`linear-gradient(90deg,${T.accent},${T.accentD})`,transition:"width .3s"}}/>
+          </div>
+        </div>
+
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:9,
+                     paddingTop:9,borderTop:`1px solid ${T.border}`,gap:6,flexWrap:"wrap"}}>
+          <div style={{fontSize:14,color:T.muted}}>
+            {p.budget?<b style={{color:T.text}}>{fmtN(p.budget)} F</b>:"—"}
+            {p.echeance?` · ⏱ ${p.echeance}`:""}
+          </div>
+          <div style={{display:"flex",gap:5}}>
+            <Btn sm variant="ghost" disabled={i===0} onClick={()=>deplacer(p,-1)}>←</Btn>
+            <Btn sm variant="ghost" disabled={i===COLONNES.length-1} onClick={()=>deplacer(p,1)}>→</Btn>
+            <Btn sm variant="danger" onClick={()=>{save(projets.filter(x=>x.id!==p.id));notify("🗑 Supprimé",T.red);}}>🗑</Btn>
+          </div>
+        </div>
+      </Card>
+    );
+  };
+
+  const deCol = projets.filter(p=>p.colonne===col);
+
+  return(
+    <div style={{flex:1,overflowY:"auto",padding:12}}>
+      <div style={{display:"flex",gap:6,marginBottom:12}}>
+        <Btn sm variant={view==="kanban"?"primary":"ghost"} onClick={()=>setView("kanban")}>📊 Tableau</Btn>
+        <Btn sm variant={view==="form"?"primary":"ghost"}   onClick={()=>{setView("form");setErrors({});}}>➕ Projet</Btn>
+      </div>
+
+      {view==="kanban" && <>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:12}}>
+          <KPI icon="📁" label="Projets"      value={projets.length}            sub={`${projets.filter(p=>p.colonne==="encours").length} en cours`} color={T.accent}/>
+          <KPI icon="💰" label="Budget total" value={fmtM(budgetTotal)+"F"}     sub={`${fmtM(budgetEnCours)}F en cours`}                            color={T.blue}/>
+        </div>
+        {retards>0 && <Card style={{marginBottom:12,background:T.red+"12",border:`1px solid ${T.red}33`,fontSize:15,color:T.text}}>
+          ⚠️ <b style={{color:T.red}}>{retards} projet{retards>1?"s":""} en retard</b> — échéance dépassée et non terminé.
+        </Card>}
+
+        <div style={{display:"flex",gap:6,marginBottom:12,overflowX:"auto"}}>
+          {COLONNES.map(c=>{
+            const n=projets.filter(p=>p.colonne===c.id).length;
+            return <Btn key={c.id} sm variant={col===c.id?"primary":"ghost"} onClick={()=>setCol(c.id)}>{c.icon} {c.label} ({n})</Btn>;
+          })}
+        </div>
+
+        {!deCol.length && <Card style={{textAlign:"center",padding:26,color:T.muted,fontSize:15}}>
+          Aucun projet dans « {COLONNES.find(c=>c.id===col)?.label} ».
+          {col==="afaire" && <><br/>Créez un projet pour commencer.</>}
+        </Card>}
+        {deCol.map(p=><Carte key={p.id} p={p}/>)}
+      </>}
+
+      {view==="form" && <Card>
+        <div style={{fontSize:17,fontWeight:700,color:T.text,marginBottom:12}}>Nouveau projet</div>
+        <Inp label="Nom du projet" required value={form.nom} onChange={v=>setForm({...form,nom:v})} placeholder="Chantier Songon, lot 3" error={errors.nom}/>
+        <Sel label="Client" value={form.client} onChange={v=>setForm({...form,client:v})}
+             options={[{value:"",label:clients.length?"— Aucun —":"— Aucun client enregistré —"},...clients.map(c=>({value:c.nom,label:c.nom}))]}/>
+        <Inp label="Budget (FCFA)" value={form.budget} onChange={v=>setForm({...form,budget:v})} placeholder="6000000" error={errors.budget}/>
+        <Inp label="Échéance" value={form.echeance} onChange={v=>setForm({...form,echeance:v})} placeholder="JJ/MM/AAAA"/>
+        <Inp label="Avancement (%)" value={form.avancement} onChange={v=>setForm({...form,avancement:v})} placeholder="0" error={errors.avancement}/>
+        <Sel label="Colonne de départ" value={form.colonne} onChange={v=>setForm({...form,colonne:v})}
+             options={COLONNES.map(c=>({value:c.id,label:`${c.icon} ${c.label}`}))}/>
+        <Inp label="Notes" value={form.notes} onChange={v=>setForm({...form,notes:v})} placeholder="Détails, intervenants..."/>
+        <Btn full onClick={ajouter}>✓ Créer le projet</Btn>
+      </Card>}
+    </div>
+  );
+}
+
+// ─── SIGNATURE ÉLECTRONIQUE ───────────────────────────────────────
+// Promise dans le Starter gratuit sur akili.africavit.com.
+//
+// Ce qui est produit ici est une SIGNATURE ÉLECTRONIQUE SIMPLE :
+// le tracé manuscrit, l'identité déclarée du signataire, l'horodatage,
+// et une empreinte SHA-256 du contenu signé. L'empreinte prouve qu'un
+// document présenté plus tard est bien celui qui a été signé : un seul
+// caractère modifié change l'empreinte.
+//
+// Ce qu'elle n'est PAS : une signature avancée ou qualifiée au sens du
+// règlement eIDAS ou de l'acte uniforme OHADA. Elle n'est pas adossée à
+// un certificat délivré par un tiers de confiance, et l'identité du
+// signataire est déclarative. Pour un contrat à fort enjeu — cession de
+// parts, garantie bancaire, marché public — il faut un prestataire
+// certifié. L'interface le dit à l'utilisateur, elle ne le cache pas.
+function SignatureTab({orgId,user,notify}){
+  const KEY=`akili_sign_${orgId}`, DOCS=`akili_docs_${orgId}`;
+  const [sigs,setSigs]=useState(()=>Store.get(KEY,[]));
+  const [view,setView]=useState("liste");
+  const [docId,setDocId]=useState("");
+  const [nom,setNom]=useState(user?.name||"");
+  const [qualite,setQualite]=useState("");
+  const [errors,setErrors]=useState({});
+  const [trace,setTrace]=useState(false);
+  const cvRef=useRef(null), dessine=useRef(false);
+  const docs=Store.get(DOCS,[]);
+  const save=l=>{setSigs(l);Store.set(KEY,l);};
+
+  // ─── Canvas ───
+  const pos=(e)=>{
+    const c=cvRef.current, r=c.getBoundingClientRect();
+    const t=e.touches?.[0];
+    return { x:((t?t.clientX:e.clientX)-r.left)*(c.width/r.width),
+             y:((t?t.clientY:e.clientY)-r.top)*(c.height/r.height) };
+  };
+  const start=(e)=>{ e.preventDefault(); dessine.current=true; const c=cvRef.current.getContext("2d");
+    const p=pos(e); c.beginPath(); c.moveTo(p.x,p.y); };
+  const move=(e)=>{ if(!dessine.current) return; e.preventDefault();
+    const c=cvRef.current.getContext("2d"); const p=pos(e);
+    c.lineTo(p.x,p.y); c.strokeStyle="#EDF3F9"; c.lineWidth=2.5; c.lineCap="round"; c.lineJoin="round"; c.stroke();
+    setTrace(true); };
+  const end=()=>{ dessine.current=false; };
+  const effacer=()=>{ const c=cvRef.current; c.getContext("2d").clearRect(0,0,c.width,c.height); setTrace(false); };
+
+  const empreinte=async(txt)=>{
+    try{
+      const buf=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(txt));
+      return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
+    }catch{ return null; }
+  };
+
+  const signer=async()=>{
+    const e={};
+    if(!docId) e.docId="Choisissez un document";
+    if(!nom.trim()) e.nom="Nom du signataire requis";
+    if(!trace) e.trace="Tracez votre signature dans le cadre";
+    setErrors(e); if(Object.keys(e).length) return;
+
+    const doc=docs.find(d=>d.id===docId);
+    const horodatage=new Date().toISOString();
+    const contenu=`${doc?.type||""}|${doc?.client||""}|${doc?.montant||""}|${doc?.contenu||doc?.texte||""}`;
+    const h=await empreinte(`${contenu}|${nom}|${qualite}|${horodatage}`);
+    if(!h){ notify("❌ Empreinte impossible (navigateur trop ancien)",T.red); return; }
+
+    save([{
+      id:newId("SIG"), docId, docType:doc?.type||"document", docClient:doc?.client||"",
+      nom:nom.trim(), qualite:qualite.trim(), horodatage, dateLisible:today(),
+      empreinte:h, image:cvRef.current.toDataURL("image/png"),
+    },...sigs]);
+    effacer(); setQualite(""); setDocId(""); setErrors({}); setView("liste");
+    notify("✍️ Document signé");
+  };
+
+  const partager=(s)=>{
+    const txt=`Signature électronique AKILI ERP\n\n`+
+      `Document : ${s.docType}${s.docClient?` — ${s.docClient}`:""}\n`+
+      `Signataire : ${s.nom}${s.qualite?` (${s.qualite})`:""}\n`+
+      `Date : ${new Date(s.horodatage).toLocaleString("fr-FR")}\n`+
+      `Empreinte SHA-256 : ${s.empreinte}\n\n`+
+      `Signature électronique simple — ${EDITEUR.nom}`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`,"_blank");
+  };
+
+  return(
+    <div style={{flex:1,overflowY:"auto",padding:12}}>
+      <div style={{display:"flex",gap:6,marginBottom:12}}>
+        <Btn sm variant={view==="liste"?"primary":"ghost"} onClick={()=>setView("liste")}>📜 Signés ({sigs.length})</Btn>
+        <Btn sm variant={view==="signer"?"primary":"ghost"} onClick={()=>{setView("signer");setErrors({});}}>✍️ Signer</Btn>
+      </div>
+
+      <Card style={{marginBottom:12,background:T.accentG,border:`1px solid ${T.accent}33`,fontSize:14,color:T.text,lineHeight:1.65}}>
+        ℹ️ <b style={{color:T.accent}}>Signature électronique simple.</b> Le tracé, l'identité déclarée,
+        l'horodatage et une empreinte du contenu sont conservés : toute modification ultérieure du document
+        change l'empreinte et devient détectable.
+        <div style={{marginTop:6,color:T.muted}}>
+          Ce n'est pas une signature qualifiée adossée à un certificat. Pour un contrat à fort enjeu
+          (cession de parts, garantie bancaire, marché public), passez par un prestataire certifié.
+        </div>
+      </Card>
+
+      {view==="signer" && <Card>
+        <Sel label="Document à signer" required value={docId} onChange={v=>{setDocId(v);setErrors({...errors,docId:""});}}
+             options={[{value:"",label:docs.length?"— Choisir —":"— Aucun document généré —"},
+                       ...docs.map(d=>({value:d.id,label:`${d.type||"document"} — ${d.client||"sans client"}`}))]}/>
+        {errors.docId && <div style={{color:T.red,fontSize:14,marginTop:-6,marginBottom:9}}>{errors.docId}</div>}
+
+        <Inp label="Nom du signataire" required value={nom} onChange={v=>setNom(v)} placeholder="DIBY Honoré" error={errors.nom}/>
+        <Inp label="Qualité" value={qualite} onChange={setQualite} placeholder="Gérant, Directeur, Client..."/>
+
+        <div style={{fontSize:14,color:T.muted,marginBottom:3,textTransform:"uppercase",letterSpacing:".5px"}}>
+          Signature <span style={{color:T.red}}>*</span>
+        </div>
+        <div style={{border:`1px solid ${errors.trace?T.red:T.border}`,borderRadius:8,background:T.bg,marginBottom:6,touchAction:"none"}}>
+          <canvas ref={cvRef} width={560} height={200}
+            onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end}
+            onTouchStart={start} onTouchMove={move} onTouchEnd={end}
+            style={{width:"100%",height:140,display:"block",cursor:"crosshair",touchAction:"none"}}/>
+        </div>
+        {errors.trace && <div style={{color:T.red,fontSize:14,marginBottom:9}}>{errors.trace}</div>}
+        <div style={{display:"flex",gap:6,marginBottom:12}}>
+          <Btn sm variant="ghost" onClick={effacer}>🧹 Effacer</Btn>
+          <span style={{fontSize:13,color:T.muted,alignSelf:"center"}}>Tracez avec le doigt</span>
+        </div>
+
+        <Btn full onClick={signer}>✍️ Signer et sceller</Btn>
+      </Card>}
+
+      {view==="liste" && <>
+        {!sigs.length && <Card style={{textAlign:"center",padding:26,color:T.muted,fontSize:15}}>
+          Aucun document signé.<br/>Générez un document dans l'onglet Documents, puis signez-le ici.
+        </Card>}
+        {sigs.map(s=>(
+          <Card key={s.id} style={{marginBottom:9}}>
+            <div style={{display:"flex",justifyContent:"space-between",gap:9,alignItems:"flex-start"}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:16,fontWeight:700,color:T.text,textTransform:"capitalize"}}>
+                  {s.docType}{s.docClient?` — ${s.docClient}`:""}
+                </div>
+                <div style={{fontSize:14,color:T.muted,marginTop:2}}>
+                  {s.nom}{s.qualite?` · ${s.qualite}`:""}
+                </div>
+                <div style={{fontSize:13,color:T.muted,marginTop:2}}>
+                  {new Date(s.horodatage).toLocaleString("fr-FR")}
+                </div>
+              </div>
+              <Badge label="Signé" color={T.green}/>
+            </div>
+            {s.image && <div style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:8,marginTop:9,padding:6}}>
+              <img src={s.image} alt="Signature" style={{width:"100%",maxHeight:90,objectFit:"contain",display:"block"}}/>
+            </div>}
+            <div style={{marginTop:9,paddingTop:9,borderTop:`1px solid ${T.border}`}}>
+              <div style={{fontSize:13,color:T.muted,marginBottom:3}}>Empreinte SHA-256</div>
+              <div style={{fontSize:12,color:T.text,fontFamily:"monospace",wordBreak:"break-all",lineHeight:1.5}}>{s.empreinte}</div>
+            </div>
+            <div style={{display:"flex",gap:5,marginTop:9}}>
+              <Btn sm variant="ghost" onClick={()=>partager(s)}>📲 Partager le certificat</Btn>
+              <Btn sm variant="danger" onClick={()=>{save(sigs.filter(x=>x.id!==s.id));notify("🗑 Supprimé",T.red);}}>🗑</Btn>
+            </div>
+          </Card>
+        ))}
+      </>}
     </div>
   );
 }
