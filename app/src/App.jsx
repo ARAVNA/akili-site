@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
          PieChart, Pie, Cell, LineChart, Line, CartesianGrid, AreaChart, Area } from "recharts";
+import { createClient } from "@supabase/supabase-js";
 
 // ═══════════════════════════════════════════════════════════════════
 // AKILI ERP v8 — ÉDITION COMPLÈTE
@@ -56,16 +57,25 @@ const enPhaseTest = () => new Date() <= PHASE_TEST_FIN;
 const joursRestants = () => Math.max(0, Math.ceil((PHASE_TEST_FIN - new Date()) / 86400000));
 
 // ═══════════════════════════════════════════════════════════════════
-// SUPABASE — authentification + données
+// COUCHE DE DONNÉES — vraies tables Supabase
 //
-// Les valeurs viennent de .env (VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY).
-// Tant qu'elles sont absentes, l'application tourne en MODE DÉMO :
-// données locales sur l'appareil, rien n'est perdu, rien ne plante.
+// L'application lit et écrit dans les tables réelles du projet
+// akili.erp : clients, documents, ecritures, employes, achats,
+// fournisseurs, stocks, mouvements_stock, fiches_paie, projets,
+// signatures, ai_quotas, taux_change.
 //
-// La clé « anon » est visible dans le navigateur — c'est normal, elle
-// n'ouvre aucun droit. Ce sont les politiques RLS qui protègent.
+// L'interface reste SYNCHRONE — Store.get(cle) / Store.set(cle, liste) —
+// pour que les écrans n'aient pas à changer. Sous le capot :
+//
+//   get  → cache mémoire, alimenté au démarrage et par Realtime
+//   set  → comparaison avec le cache, puis insert / update / delete
+//          des seules lignes qui ont réellement changé
+//
+// Pourquoi comparer plutôt que tout réécrire : un module appelle
+// Store.set avec la liste entière à chaque modification. Réécrire
+// 200 clients pour en changer un serait absurde et ferait exploser
+// le quota de requêtes.
 // ═══════════════════════════════════════════════════════════════════
-import { createClient } from "@supabase/supabase-js";
 
 const SB_URL  = import.meta.env.VITE_SUPABASE_URL;
 const SB_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -75,169 +85,263 @@ let _sb = null;
 const sb = () => {
   if (!SB_OK) return null;
   if (!_sb) _sb = createClient(SB_URL, SB_ANON, {
-    auth: { persistSession: true, autoRefreshToken: true },
-    realtime: { params: { eventsPerSecond: 5 } },
+    auth:{ persistSession:true, autoRefreshToken:true },
+    realtime:{ params:{ eventsPerSecond:5 } },
   });
   return _sb;
 };
 const actif = () => SB_OK && !!sb();
 
-const TABLE = "akili_stores";
-const MODULES_ORG = ["docs","clients","stocks","mvts","employes","paie","ecrit","fourn","achats","projets","sign"];
+const uuid = () => (crypto.randomUUID ? crypto.randomUUID()
+  : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+      const r = Math.random()*16|0; return (c==="x"?r:(r&0x3|0x8)).toString(16); }));
 
-// ─── APPEL À L'IA ─────────────────────────────────────────────────
-// Passe par /api/ia, jamais directement par api.anthropic.com :
-// la clé reste sur le serveur, et le quota y est décompté hors de
-// portée du navigateur.
-async function appelIA({system,messages}){
-  const c=sb();
-  if(!c) throw new Error("L'assistant IA nécessite un compte. En mode démo, il est indisponible.");
-  let jeton=null;
-  try{ const {data}=await c.auth.getSession(); jeton=data?.session?.access_token; }catch{}
-  if(!jeton) throw new Error("Session expirée. Reconnectez-vous.");
-  let r,d;
-  try{
-    r=await fetch("/api/ia",{method:"POST",
-      headers:{"content-type":"application/json",Authorization:`Bearer ${jeton}`},
-      body:JSON.stringify({system,messages})});
-    d=await r.json().catch(()=>({}));
-  }catch{ throw new Error("Assistant injoignable. Vérifiez votre connexion."); }
-  if(!r.ok) throw new Error(d?.error||"L'assistant n'a pas pu répondre.");
-  if(!d?.texte) throw new Error("Réponse vide de l'assistant.");
-  return d;
-}
+// ─── Correspondance entre les champs de l'écran et les colonnes ───
+// À gauche le nom utilisé par les écrans, à droite la colonne réelle.
+// Toute colonne absente ici n'est ni lue ni écrite.
+const SCHEMA = {
+  clients: { table:"clients", id:"uuid", champs:{
+    nom:"nom", secteur:"secteur", statut:"statut", ca:"ca",
+    tel:"tel", email:"email", note:"note" }},
 
-// ─── STORAGE ──────────────────────────────────────────────────────
-// API SYNCHRONE : les 7 modules lisent et écrivent comme avant.
-//   lecture  → cache mémoire, alimenté par une copie locale + Realtime
-//   écriture → cache + copie locale immédiats, puis Supabase (groupé)
-const Store = {
+  docs: { table:"documents", id:"texte", champs:{
+    type:"type", client:"client", montant:"montant", devise:"devise",
+    content:"content", owner:"user_id", statutPaiement:"statut_paiement",
+    dateEcheance:"date_echeance", montantHT:"montant_ht", tva:"tva",
+    montantTVA:"montant_tva", nifClient:"nif_client", rccmClient:"rccm_client",
+    adresseClient:"adresse_client", lignes:"lignes" }},
+
+  ecrit: { table:"ecritures", id:"uuid", champs:{
+    date:"date", libelle:"libelle", compte:"compte", debit:"debit",
+    credit:"credit", piece:"piece", src:"src", journal:"journal" }},
+
+  employes: { table:"employes", id:"uuid", champs:{
+    nom:"nom", poste:"poste", typeContrat:"type_contrat",
+    salaireBrut:"salaire_brut", departement:"departement",
+    dateEntree:"date_entree", tel:"tel", email:"email",
+    congesRestants:"conges_restants" }},
+
+  achats: { table:"achats", id:"texte", champs:{
+    date:"date", fournisseur:"fournisseur", fournisseurId:"fournisseur_id",
+    designation:"description", montantHT:"montant", tva:"tva",
+    statut:"statut", piece:"piece" }},
+
+  fourn: { table:"fournisseurs", id:"uuid", champs:{
+    nom:"nom", contact:"contact", tel:"tel", email:"email",
+    compte:"compte", notes:"notes" }},
+
+  stocks: { table:"stocks", id:"uuid", champs:{
+    nom:"nom", categorie:"categorie", quantite:"quantite", unite:"unite",
+    prixAchat:"prix_achat", prixVente:"prix_vente",
+    seuilAlerte:"seuil_alerte", fournisseur:"fournisseur" }},
+
+  mvts: { table:"mouvements_stock", id:"uuid", champs:{
+    produitId:"produit_id", produitNom:"produit_nom", type:"type",
+    quantite:"quantite", motif:"motif", date:"date",
+    ancienStock:"ancien_stock", nouveauStock:"nouveau_stock" }},
+
+  paie: { table:"fiches_paie", id:"uuid", champs:{
+    employeId:"employe_id", employeNom:"employe_nom", poste:"poste",
+    mois:"mois", brut:"brut", cnpsSalarie:"cnps_salarie",
+    cnpsPatronal:"cnps_patronal", its:"its", net:"net",
+    coutTotal:"cout_total", date:"date" }},
+
+  projets: { table:"projets", id:"uuid", champs:{
+    nom:"nom", client:"client", budget:"budget", echeance:"echeance",
+    avancement:"avancement", colonne:"colonne", notes:"notes" }},
+
+  sign: { table:"signatures", id:"uuid", champs:{
+    docId:"document_id", docType:"doc_type", docClient:"doc_client",
+    nom:"signataire", qualite:"qualite", horodatage:"horodatage",
+    empreinte:"empreinte", image:"image" }},
+};
+
+// Colonnes numériques : Postgres renvoie du texte pour numeric, et les
+// écrans comparent parfois avec ===. On convertit au passage.
+const NOMBRES = new Set(["ca","montant","debit","credit","salaire_brut",
+  "conges_restants","quantite","prix_achat","prix_vente","seuil_alerte",
+  "ancien_stock","nouveau_stock","brut","cnps_salarie","cnps_patronal",
+  "its","net","cout_total","budget","avancement","montant_ht","tva",
+  "montant_tva","count"]);
+
+const versEcran = (nom, ligne) => {
+  const s = SCHEMA[nom]; const o = { id: ligne.id };
+  for (const [k, col] of Object.entries(s.champs)) {
+    let v = ligne[col];
+    if (v !== null && v !== undefined && NOMBRES.has(col)) v = Number(v);
+    o[k] = v ?? "";
+  }
+  if (ligne.created_at) o.creeLe = ligne.created_at;
+  return o;
+};
+
+const versBase = (nom, obj, orgId) => {
+  const s = SCHEMA[nom]; const o = { id: obj.id, org_id: orgId };
+  for (const [k, col] of Object.entries(s.champs)) {
+    let v = obj[k];
+    if (v === "" || v === undefined) v = null;
+    if (v !== null && NOMBRES.has(col)) { const n = Number(v); v = isNaN(n) ? null : n; }
+    o[col] = v;
+  }
+  return o;
+};
+
+// ─── Store ────────────────────────────────────────────────────────
+export const Store = {
   _c:new Map(), _subs:new Set(), _rsubs:new Set(), _chan:null,
-  _t:new Map(), _d:null, _scope:null, _pending:0, _hooked:false,
+  _scope:null, _pending:0, _hooked:false, _file:new Map(),
 
-  // akili_clients_<orgId> → scope "org:<orgId>", key "clients"
-  _ref(k){
+  // akili_clients_<orgId> → "clients"
+  _nom(k){
     const s=Store._scope; if(!s) return null;
-    if(k===`akili_chat_${s.uid}`)          return {scope:`user:${s.uid}`,key:"chat"};
-    if(k.startsWith(`akili_q_${s.uid}_`))  return {scope:`user:${s.uid}`,key:"q_"+k.slice(`akili_q_${s.uid}_`.length)};
-    if(s.orgId && k.endsWith(`_${s.orgId}`)) return {scope:`org:${s.orgId}`,key:k.slice(6,-(s.orgId.length+1))};
-    return null;
-  },
-  _cle(scope,key){
-    const s=Store._scope; if(!s) return null;
-    if(scope===`user:${s.uid}`)  return key==="chat"?`akili_chat_${s.uid}`:`akili_q_${s.uid}_${key.slice(2)}`;
-    if(scope===`org:${s.orgId}`) return `akili_${key}_${s.orgId}`;
-    return null;
-  },
-
-  _localGet(k,d){ try{ const v=localStorage.getItem(k); return v?JSON.parse(v):d; }catch{ return d; } },
-  _localSet(k,v){
-    try{
-      const s=JSON.stringify(v);
-      if(s.length>4_000_000&&Array.isArray(v)) return Store._localSet(k,v.slice(0,50));
-      localStorage.setItem(k,s); return true;
-    }catch(e){
-      if(e?.name==="QuotaExceededError"){ try{ const a=Store._localGet(k,[]); if(Array.isArray(a)) localStorage.setItem(k,JSON.stringify(a.slice(0,20))); }catch{} }
-      return false;
+    if(k===`akili_chat_${s.uid}`) return "chat";
+    if(k.startsWith(`akili_q_${s.uid}_`)) return "quota";
+    if(k.startsWith(`akili_taux_`)) return "taux";
+    if(s.orgId && k.endsWith(`_${s.orgId}`)){
+      const n=k.slice(6,-(s.orgId.length+1));
+      return SCHEMA[n] ? n : null;
     }
+    return null;
+  },
+  _cle(nom){
+    const s=Store._scope; if(!s) return null;
+    return `akili_${nom}_${s.orgId}`;
   },
 
-  // Registre des écritures non confirmées, qui survit à la fermeture.
-  // Sans lui, une saisie faite juste avant que l'utilisateur quitte
-  // l'application n'est jamais partie — et au redémarrage, la version
-  // plus ancienne du serveur l'écrase. La donnée disparaît des deux côtés.
-  attente(){
-    if(!Store._d){ try{ Store._d=new Set(JSON.parse(Store._localGet("akili_attente","[]")||"[]")); }catch{ Store._d=new Set(); }
-      if(!(Store._d instanceof Set)) Store._d=new Set(); }
-    return Store._d;
-  },
-  _attSave(){ Store._localSet("akili_attente",JSON.stringify([...Store.attente()])); },
-  _attAdd(k){ Store.attente().add(k); Store._attSave(); },
-  _attDone(k){ Store.attente().delete(k); Store._attSave(); },
+  // Le chat et les réglages restent dans le navigateur : ils ne
+  // concernent qu'une personne sur un appareil, et les mettre en base
+  // coûterait une requête par message sans rien apporter.
+  _localGet(k,d){ try{ const v=localStorage.getItem(k); return v?JSON.parse(v):d; }catch{ return d; } },
+  _localSet(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); return true; }catch{ return false; } },
 
   get(k,d=[]){
     if(Store._c.has(k)) return Store._c.get(k);
-    const v=Store._localGet(k,d); Store._c.set(k,v); return v;
+    const v=Store._localGet(k,d);
+    Store._c.set(k,v);
+    return v;
   },
+
   set(k,v){
     Store._c.set(k,v);
     Store._localSet(k,v);
-    if(actif()&&Store._ref(k)) Store._attAdd(k);
-    Store._push(k,v);
+    const nom=Store._nom(k);
+    if(actif()&&nom&&SCHEMA[nom]) Store._sync(nom,v);
+    else if(actif()&&nom==="quota") Store._syncQuota(v);
+    else if(actif()&&nom==="taux")  Store._syncTaux(v);
     Store._emit();
     return true;
   },
 
-  _push(k,v){
-    if(!actif()) return;
-    const r=Store._ref(k); if(!r) return;
-    clearTimeout(Store._t.get(k));
-    Store._t.set(k,setTimeout(async()=>{
-      try{
-        Store._pending++; Store._emit();
-        const {error}=await sb().from(TABLE).upsert(
-          {scope:r.scope,key:r.key,data:v,updated_at:new Date().toISOString()},
-          {onConflict:"scope,key"});
-        if(error) throw error;
-        Store._attDone(k);
-      }catch(e){ console.warn("Supabase",k,e?.message); }
-      finally{ Store._pending--; Store._emit(); }
-    },600));
+  // Compare l'ancien et le nouvel état, n'envoie que les différences.
+  async _sync(nom,liste){
+    const s=SCHEMA[nom], org=Store._scope?.orgId;
+    if(!org) return;
+    const avant=Store._file.get(nom)||[];
+    const idsAvant=new Set(avant.map(x=>x.id));
+    const idsApres=new Set();
+
+    const aInserer=[], aMajour=[];
+    for(const item of (liste||[])){
+      // Les tables à identifiant uuid refusent nos numéros lisibles.
+      if(!item.id || (s.id==="uuid" && !/^[0-9a-f-]{36}$/i.test(item.id))) item.id=uuid();
+      idsApres.add(item.id);
+      const ancien=avant.find(x=>x.id===item.id);
+      const ligne=versBase(nom,item,org);
+      if(!ancien) aInserer.push(ligne);
+      else if(JSON.stringify(versBase(nom,ancien,org))!==JSON.stringify(ligne)) aMajour.push(ligne);
+    }
+    const aSupprimer=[...idsAvant].filter(id=>!idsApres.has(id));
+
+    Store._file.set(nom,JSON.parse(JSON.stringify(liste||[])));
+    if(!aInserer.length&&!aMajour.length&&!aSupprimer.length) return;
+
+    Store._pending++; Store._emit();
+    try{
+      const c=sb();
+      if(aInserer.length){ const {error}=await c.from(s.table).insert(aInserer); if(error) throw error; }
+      if(aMajour.length){ const {error}=await c.from(s.table).upsert(aMajour,{onConflict:"id"}); if(error) throw error; }
+      if(aSupprimer.length){ const {error}=await c.from(s.table).delete().in("id",aSupprimer); if(error) throw error; }
+    }catch(e){
+      console.warn("Supabase",s.table,e?.message);
+      // L'état local reste juste ; la prochaine écriture retentera.
+      Store._file.set(nom,avant);
+    }finally{ Store._pending--; Store._emit(); }
   },
 
-  flush(){
-    Store._t.forEach(t=>clearTimeout(t)); Store._t.clear();
-    if(!actif()) return;
-    [...Store.attente()].forEach(k=>{
-      const r=Store._ref(k); if(!r) return;
-      const v=Store._c.has(k)?Store._c.get(k):Store._localGet(k,null);
-      if(v===null) return;
-      try{ sb().from(TABLE).upsert({scope:r.scope,key:r.key,data:v,updated_at:new Date().toISOString()},{onConflict:"scope,key"})
-        .then(({error})=>{ if(!error) Store._attDone(k); }); }catch{}
-    });
+  async _syncQuota(v){
+    const s=Store._scope; if(!s?.orgId) return;
+    const mois=`${new Date().getMonth()}_${new Date().getFullYear()}`;
+    try{ await sb().from("ai_quotas")
+      .upsert({org_id:s.orgId,month:mois,count:Number(v?.count||0)},{onConflict:"org_id,month"}); }
+    catch(e){ console.warn("ai_quotas",e?.message); }
+  },
+  async _syncTaux(v){
+    const s=Store._scope; if(!s?.orgId) return;
+    try{ await sb().from("taux_change")
+      .upsert({org_id:s.orgId,usd:Number(v?.usd||0),maj:new Date().toISOString()},{onConflict:"org_id"}); }
+    catch(e){ console.warn("taux_change",e?.message); }
   },
 
+  // ─── Chargement initial + temps réel ───
   async bind(scope){
     await Store.unbind();
     Store._scope=scope;
-    if(!actif()||!scope) return;
-    const c=sb(); const scopes=[`org:${scope.orgId}`,`user:${scope.uid}`];
+    if(!actif()||!scope?.orgId) return;
+    const c=sb(), org=scope.orgId;
 
+    await Promise.all(Object.entries(SCHEMA).map(async([nom,s])=>{
+      try{
+        const {data,error}=await c.from(s.table).select("*").eq("org_id",org)
+          .order("created_at",{ascending:false}).limit(2000);
+        if(error) throw error;
+        const liste=(data||[]).map(l=>versEcran(nom,l));
+        Store._c.set(Store._cle(nom),liste);
+        Store._file.set(nom,JSON.parse(JSON.stringify(liste)));
+        Store._localSet(Store._cle(nom),liste);
+      }catch(e){ console.warn("chargement",s.table,e?.message); }
+    }));
+
+    // Quota de l'organisation (et non de la personne)
     try{
-      const {data,error}=await c.from(TABLE).select("scope,key,data").in("scope",scopes);
-      if(error) throw error;
-      (data||[]).forEach(row=>{
-        const k=Store._cle(row.scope,row.key); if(!k) return;
-        if(Store.attente().has(k)) return;
-        Store._c.set(k,row.data); Store._localSet(k,row.data);
-      });
-      Store._emit(); Store._emitRemote();
-    }catch(e){ console.warn("Supabase chargement",e?.message); }
+      const mois=`${new Date().getMonth()}_${new Date().getFullYear()}`;
+      const {data}=await c.from("ai_quotas").select("count")
+        .eq("org_id",org).eq("month",mois).maybeSingle();
+      Store._c.set(`akili_q_${scope.uid}_${mois}`,{count:Number(data?.count||0)});
+    }catch{}
+    try{
+      const {data}=await c.from("taux_change").select("usd").eq("org_id",org).maybeSingle();
+      if(data) Store._c.set(`akili_taux_${org}`,{usd:Number(data.usd||0)});
+    }catch{}
 
-    Store._chan=c.channel("akili_sync");
-    scopes.forEach(sc=>{
-      Store._chan.on("postgres_changes",{event:"*",schema:"public",table:TABLE,filter:`scope=eq.${sc}`},payload=>{
-        const row=payload.new; if(!row) return;
-        const k=Store._cle(row.scope,row.key); if(!k) return;
-        if(Store.attente().has(k)) return;                 // local plus récent
-        try{ if(JSON.stringify(Store._c.get(k))===JSON.stringify(row.data)) return; }catch{}
-        Store._c.set(k,row.data); Store._localSet(k,row.data);
-        Store._emit(); Store._emitRemote();
-      });
+    Store._emit(); Store._emitRemote();
+
+    // Temps réel : un seul canal pour toutes les tables de l'entreprise
+    Store._chan=c.channel("akili_tables");
+    Object.entries(SCHEMA).forEach(([nom,s])=>{
+      Store._chan.on("postgres_changes",
+        {event:"*",schema:"public",table:s.table,filter:`org_id=eq.${org}`},
+        async ()=>{
+          try{
+            const {data}=await c.from(s.table).select("*").eq("org_id",org)
+              .order("created_at",{ascending:false}).limit(2000);
+            const liste=(data||[]).map(l=>versEcran(nom,l));
+            const cle=Store._cle(nom);
+            if(JSON.stringify(Store._c.get(cle))===JSON.stringify(liste)) return;
+            Store._c.set(cle,liste);
+            Store._file.set(nom,JSON.parse(JSON.stringify(liste)));
+            Store._localSet(cle,liste);
+            Store._emit(); Store._emitRemote();
+          }catch{}
+        });
     });
     Store._chan.subscribe();
-
-    [...Store.attente()].forEach(k=>{ const v=Store._localGet(k,null); if(v!==null) Store._push(k,v); });
-
-    if(!Store._hooked){
-      Store._hooked=true;
-      window.addEventListener("pagehide",()=>Store.flush());
-      document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="hidden") Store.flush(); });
-    }
   },
 
-  async unbind(){ if(Store._chan){ try{ await sb()?.removeChannel(Store._chan); }catch{} Store._chan=null; } Store._scope=null; },
-  async clear(){ Store.flush(); await Store.unbind(); Store._c.clear(); },
+  async unbind(){
+    if(Store._chan){ try{ await sb()?.removeChannel(Store._chan); }catch{} Store._chan=null; }
+    Store._scope=null;
+  },
+  async clear(){ await Store.unbind(); Store._c.clear(); Store._file.clear(); },
 
   subscribe(cb){ Store._subs.add(cb); return ()=>Store._subs.delete(cb); },
   subscribeRemote(cb){ Store._rsubs.add(cb); return ()=>Store._rsubs.delete(cb); },
@@ -247,9 +351,6 @@ const Store = {
   size(){ try{ let t=0; for(let k in localStorage) if(localStorage.hasOwnProperty(k)) t+=localStorage[k].length; return Math.round(t/1024); }catch{ return 0; } },
 };
 
-// Compteur de mises à jour DISTANTES : sert de clé de remontage aux
-// modules, qui gardent chacun leur état local. N'augmente pas sur tes
-// propres saisies, sinon un formulaire en cours de frappe se viderait.
 function useSync(){
   const [,bump]=useState(0);
   const [rv,rbump]=useState(0);
@@ -260,6 +361,7 @@ function useSync(){
   },[]);
   return rv;
 }
+
 
 // ─── QUOTA ────────────────────────────────────────────────────────
 const QM = {
@@ -613,7 +715,7 @@ function posterEcritures(orgId, src, lignes){
   if(!lignes||!lignes.length){ Store.set(KEY,ex); return 0; }
   const nouvelles=lignes
     .filter(l=>Number(l.debit||0)!==0||Number(l.credit||0)!==0)
-    .map((l,i)=>({id:`${src}-${i}`,src,...l,auto:true}));
+    .map(l=>({id:uuid(),src,journal:l.journal||"OD",...l}));
   Store.set(KEY,[...nouvelles,...ex]);
   return nouvelles.length;
 }
@@ -625,11 +727,12 @@ function ecrituresVente({date,libelle,piece,montantHT,tauxTVA=18,compteProduit="
   const ht=Math.round(Number(montantHT||0));
   const tva=Math.round(ht*Number(tauxTVA||0)/100);
   const ttc=ht+tva;
+  const J="VT";   // journal des ventes
   const l=[
-    {date,libelle,piece,compte:encaisse?compteTresorerie:"411",debit:ttc,credit:0},
-    {date,libelle,piece,compte:compteProduit,debit:0,credit:ht},
+    {date,libelle,piece,journal:J,compte:encaisse?compteTresorerie:"411",debit:ttc,credit:0},
+    {date,libelle,piece,journal:J,compte:compteProduit,debit:0,credit:ht},
   ];
-  if(tva) l.push({date,libelle:`TVA collectée — ${libelle}`,piece,compte:"443",debit:0,credit:tva});
+  if(tva) l.push({date,libelle:`TVA collectée — ${libelle}`,piece,journal:J,compte:"443",debit:0,credit:tva});
   return l;
 }
 
@@ -639,21 +742,23 @@ function ecrituresAchat({date,libelle,piece,montantHT,tauxTVA=18,compteCharge="6
   const ht=Math.round(Number(montantHT||0));
   const tva=Math.round(ht*Number(tauxTVA||0)/100);
   const ttc=ht+tva;
-  const l=[{date,libelle,piece,compte:compteCharge,debit:ht,credit:0}];
-  if(tva) l.push({date,libelle:`TVA déductible — ${libelle}`,piece,compte:"445",debit:tva,credit:0});
-  l.push({date,libelle,piece,compte:regle?compteTresorerie:"401",debit:0,credit:ttc});
+  const J="AC";   // journal des achats
+  const l=[{date,libelle,piece,journal:J,compte:compteCharge,debit:ht,credit:0}];
+  if(tva) l.push({date,libelle:`TVA déductible — ${libelle}`,piece,journal:J,compte:"445",debit:tva,credit:0});
+  l.push({date,libelle,piece,journal:J,compte:regle?compteTresorerie:"401",debit:0,credit:ttc});
   return l;
 }
 
 // Un bulletin de paie : la charge est le coût total employeur ; se
 // répartissent le net à payer, les cotisations CNPS et l'ITS.
 function ecrituresPaie({date,libelle,piece,brut,cnpsSalarie,cnpsPatronal,its,net}){
+  const J="PA";   // journal de paie
   return [
-    {date,libelle,piece,compte:"661",debit:Math.round(brut),credit:0},
-    {date,libelle:`Charges patronales — ${libelle}`,piece,compte:"664",debit:Math.round(cnpsPatronal),credit:0},
-    {date,libelle:`Net à payer — ${libelle}`,piece,compte:"422",debit:0,credit:Math.round(net)},
-    {date,libelle:`CNPS — ${libelle}`,piece,compte:"431",debit:0,credit:Math.round(cnpsSalarie)+Math.round(cnpsPatronal)},
-    {date,libelle:`ITS — ${libelle}`,piece,compte:"447",debit:0,credit:Math.round(its)},
+    {date,libelle,piece,journal:J,compte:"661",debit:Math.round(brut),credit:0},
+    {date,libelle:`Charges patronales — ${libelle}`,piece,journal:J,compte:"664",debit:Math.round(cnpsPatronal),credit:0},
+    {date,libelle:`Net à payer — ${libelle}`,piece,journal:J,compte:"422",debit:0,credit:Math.round(net)},
+    {date,libelle:`CNPS — ${libelle}`,piece,journal:J,compte:"431",debit:0,credit:Math.round(cnpsSalarie)+Math.round(cnpsPatronal)},
+    {date,libelle:`ITS — ${libelle}`,piece,journal:J,compte:"447",debit:0,credit:Math.round(its)},
   ];
 }
 
@@ -1107,10 +1212,10 @@ function StocksTab({orgId,user,notify}){
     if(valeur>0){
       const lib=`${mvtForm.type==="entree"?"Entrée":"Sortie"} stock — ${prod.nom}${mvtForm.motif?` (${mvtForm.motif})`:""}`;
       posterEcritures(orgId,mvt.id, mvtForm.type==="entree"
-        ? [{date:mvtForm.date,libelle:lib,piece:mvt.id,compte:"311",debit:valeur,credit:0},
-           {date:mvtForm.date,libelle:lib,piece:mvt.id,compte:"603",debit:0,credit:valeur}]
-        : [{date:mvtForm.date,libelle:lib,piece:mvt.id,compte:"603",debit:valeur,credit:0},
-           {date:mvtForm.date,libelle:lib,piece:mvt.id,compte:"311",debit:0,credit:valeur}]);
+        ? [{date:mvtForm.date,libelle:lib,piece:mvt.id,journal:"OD",compte:"311",debit:valeur,credit:0},
+           {date:mvtForm.date,libelle:lib,piece:mvt.id,journal:"OD",compte:"603",debit:0,credit:valeur}]
+        : [{date:mvtForm.date,libelle:lib,piece:mvt.id,journal:"OD",compte:"603",debit:valeur,credit:0},
+           {date:mvtForm.date,libelle:lib,piece:mvt.id,journal:"OD",compte:"311",debit:0,credit:valeur}]);
     }
     setMvtForm({produitId:"",type:"entree",quantite:"",motif:"",date:today()});
     notify(`✅ Mouvement enregistré — Nouveau stock : ${newQty} ${prod.unite}`);
@@ -1669,7 +1774,7 @@ function ComptaTab({orgId,user,notify}){
   const [page,setPage]=useState(0); const PP=15;
   const [cpt,setCpt]=useState("");       // compte ouvert dans le grand livre
   const [errors,setErrors]=useState({});
-  const vide={date:today(),libelle:"",compte:"521",debit:"",credit:"",piece:""};
+  const vide={date:today(),libelle:"",compte:"521",debit:"",credit:"",piece:"",journal:"OD"};
   const [form,setForm]=useState(vide);
   const [taux,setTaux]=useState(()=>String(tauxUSD(orgId)||""));
 
@@ -1680,7 +1785,7 @@ function ComptaTab({orgId,user,notify}){
   const res     = Compta.resultat(ecritures);
   const bil     = Compta.bilan(ecritures);
   const ctrl    = Compta.controles(ecritures);
-  const auto    = ecritures.filter(e=>e.auto).length;
+  const auto    = ecritures.filter(e=>e.src).length;
 
   const ajouter=()=>{
     const e={};
@@ -1690,13 +1795,13 @@ function ComptaTab({orgId,user,notify}){
     if(d&&c)   e.debit="Une ligne porte un débit OU un crédit, pas les deux";
     if(!form.piece.trim()) e.piece="N° de pièce requis (obligatoire en OHADA)";
     setErrors(e); if(Object.keys(e).length) return;
-    save([{...form,id:newId("ECR"),debit:d,credit:c},...ecritures]);
+    save([{...form,id:uuid(),debit:d,credit:c},...ecritures]);
     setForm({...vide,date:form.date}); setErrors({});
     notify("✅ Écriture enregistrée");
   };
 
   const supprimer=(e)=>{
-    if(e.auto){ notify("⚠️ Écriture automatique — modifiez la pièce d'origine",T.accent); return; }
+    if(e.src){ notify("⚠️ Écriture automatique — modifiez la pièce d'origine",T.accent); return; }
     save(ecritures.filter(x=>x.id!==e.id)); notify("🗑 Supprimé",T.red);
   };
 
@@ -1779,14 +1884,14 @@ function ComptaTab({orgId,user,notify}){
                   <div style={{fontWeight:700,fontSize:16,color:T.text}}>{e.libelle}</div>
                   <div style={{fontSize:13,color:T.muted,marginTop:2}}>
                     {e.date} · {e.compte} {libelleCompte(e.compte)}{e.piece?` · ${e.piece}`:""}
-                    {e.auto && <span style={{color:T.accent}}> · auto</span>}
+                    {e.src && <span style={{color:T.accent}}> · auto</span>}
                   </div>
                 </div>
                 <div style={{textAlign:"right"}}>
                   {!!Number(e.debit) && <div style={{fontSize:15,fontWeight:700,color:T.text}}>D {fmtN(e.debit)}</div>}
                   {!!Number(e.credit)&& <div style={{fontSize:15,fontWeight:700,color:T.muted}}>C {fmtN(e.credit)}</div>}
                 </div>
-                <button onClick={()=>supprimer(e)} style={{background:"none",border:"none",color:e.auto?T.border:T.red,cursor:"pointer",fontSize:16}}>🗑</button>
+                <button onClick={()=>supprimer(e)} style={{background:"none",border:"none",color:e.src?T.border:T.red,cursor:"pointer",fontSize:16}}>🗑</button>
               </div>
             </Card>))}
         <Pager total={ecritures.length} page={page} pp={PP} onPage={setPage}/>
@@ -2116,8 +2221,8 @@ function AchatsTab({orgId,user,notify}){
   const reglerAchat=(a)=>{
     saveA(achats.map(x=>x.id===a.id?{...x,statut:"Payé"}:x));
     posterEcritures(orgId,a.id+"-reg",[
-      {date:today(),libelle:`Règlement ${a.fournisseur}`,piece:a.piece||a.id,compte:"401",debit:ttc(a),credit:0},
-      {date:today(),libelle:`Règlement ${a.fournisseur}`,piece:a.piece||a.id,compte:"521",debit:0,credit:ttc(a)},
+      {date:today(),libelle:`Règlement ${a.fournisseur}`,piece:a.piece||a.id,journal:"BQ",compte:"401",debit:ttc(a),credit:0},
+      {date:today(),libelle:`Règlement ${a.fournisseur}`,piece:a.piece||a.id,journal:"BQ",compte:"521",debit:0,credit:ttc(a)},
     ]);
     notify("✅ Réglé · écriture de trésorerie créée");
   };
