@@ -42,10 +42,18 @@ const EDITEUR = {
 
 // ─── PLANS ────────────────────────────────────────────────────────
 const PLANS = {
-  starter:    { label:"Starter",    color:T.blue,   prix:5000,  quota:30,  docs:20  },
+  starter:    { label:"Starter",    color:T.blue,   prix:0,     quota:30,  docs:10  },
   business:   { label:"Business",   color:T.accent, prix:15000, quota:150, docs:999 },
   enterprise: { label:"Entreprise", color:T.purple, prix:50000, quota:999, docs:999 },
 };
+
+// ─── PHASE DE TEST ────────────────────────────────────────────────
+// akili.africavit.com annonce : « toutes les options d'Akili ERP sont
+// gratuites jusqu'au 21 novembre 2026 ». L'application doit tenir cette
+// promesse : pendant la phase, aucune limite de quota ne s'applique.
+const PHASE_TEST_FIN = new Date("2026-11-21T23:59:59");
+const enPhaseTest = () => new Date() <= PHASE_TEST_FIN;
+const joursRestants = () => Math.max(0, Math.ceil((PHASE_TEST_FIN - new Date()) / 86400000));
 
 // ═══════════════════════════════════════════════════════════════════
 // SUPABASE — authentification + données
@@ -236,8 +244,9 @@ const QM = {
   key:(uid)=>`akili_q_${uid}_${new Date().getMonth()}_${new Date().getFullYear()}`,
   usage:(uid)=>Store.get(QM.key(uid),{count:0}),
   inc:(uid)=>{ const u=QM.usage(uid); Store.set(QM.key(uid),{count:u.count+1}); return u.count+1; },
-  can:(uid,plan)=>QM.usage(uid).count<(PLANS[plan]?.quota||30),
-  left:(uid,plan)=>Math.max(0,(PLANS[plan]?.quota||30)-QM.usage(uid).count),
+  // Phase de test : promesse publique de gratuite totale, donc aucune limite
+  can:(uid,plan)=>enPhaseTest()||QM.usage(uid).count<(PLANS[plan]?.quota||30),
+  left:(uid,plan)=>enPhaseTest()?999:Math.max(0,(PLANS[plan]?.quota||30)-QM.usage(uid).count),
 };
 
 // ─── AUTH ─────────────────────────────────────────────────────────
@@ -733,6 +742,10 @@ function HomeTab({orgId,user,plan,onUpgrade}){
       {/* Disclaimer rappel */}
       <Card style={{padding:13,border:`1px solid ${T.accent}18`}}>
         <div style={{fontSize:13,color:T.muted,lineHeight:1.6}}>
+          {enPhaseTest() && <div style={{marginBottom:9,paddingBottom:9,borderBottom:`1px solid ${T.border}`}}>
+            🎁 <b style={{color:T.accent}}>Phase de test</b> : toutes les options sont gratuites jusqu'au 21 novembre 2026
+            <span style={{color:T.muted}}> — encore {joursRestants()} jour{joursRestants()>1?"s":""}. Vos données sont conservées ensuite.</span>
+          </div>}
           ⚠️ <b style={{color:T.accent}}>Rappel légal</b> : Documents indicatifs — faites valider par des professionnels qualifiés.
           <div style={{marginTop:5,fontSize:12,color:T.muted}}>
             Édité par {EDITEUR.nom} · RCCM {EDITEUR.rccm} · NCC {EDITEUR.ncc} · {EDITEUR.site}
