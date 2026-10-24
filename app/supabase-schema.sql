@@ -215,6 +215,16 @@ create unique index if not exists ai_quotas_org_mois
   on public.ai_quotas (org_id, month);
 
 
+-- Colonnes nécessaires à l'application et absentes de la table achats :
+-- sans elles, le taux de TVA et le numéro de pièce justificative seraient
+-- perdus à l'enregistrement. L'OHADA exige la pièce justificative.
+alter table public.achats add column if not exists tva numeric default 18;
+alter table public.achats add column if not exists piece text;
+
+-- De quel document une signature relève, pour l'afficher sans jointure.
+alter table public.signatures add column if not exists doc_type text;
+alter table public.signatures add column if not exists doc_client text;
+
 -- ─── 4. SÉCURITÉ AU NIVEAU DES LIGNES ─────────────────────────────
 -- Sans ceci, n'importe quel visiteur muni de la clé publique lirait la
 -- comptabilité de tous vos clients. Ce n'est pas optionnel.

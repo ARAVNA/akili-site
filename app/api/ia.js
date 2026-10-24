@@ -63,11 +63,13 @@ export default async function handler(req, res) {
   const uid = utilisateur?.id;
   if (!uid) return json(res, 401, { error: "Session invalide." });
 
-  // ── 2. Quelle offre, et quel quota restant ? ──
+  // ── 2. Quelle entreprise, quelle offre, quel quota restant ? ──
+  // Le quota se compte par ENTREPRISE et non par personne : c'est
+  // l'entreprise qui souscrit, et ses collaborateurs partagent
+  // l'enveloppe. La table ai_quotas est construite ainsi.
   const maintenant = new Date();
-  const cleQuota = `q_${maintenant.getUTCMonth()}_${maintenant.getUTCFullYear()}`;
-  const scope = `user:${uid}`;
-  let plan = "starter", utilises = 0;
+  const mois = `${maintenant.getMonth()}_${maintenant.getFullYear()}`;
+  let orgId = null, plan = "starter", utilises = 0;
 
   if (SB_SVC) {
     const sbGet = (chemin) =>
@@ -75,17 +77,21 @@ export default async function handler(req, res) {
         headers: { apikey: SB_SVC, Authorization: `Bearer ${SB_SVC}` },
       }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
 
-    const profils = await sbGet(`profiles?id=eq.${uid}&select=plan`);
-    if (Array.isArray(profils) && profils[0]?.plan) plan = profils[0].plan;
+    const profils = await sbGet(`profiles?id=eq.${uid}&select=org_id`);
+    orgId = Array.isArray(profils) ? profils[0]?.org_id : null;
+    if (!orgId) return json(res, 403, { error: "Aucune entreprise rattachée à ce compte." });
 
-    const lignes = await sbGet(`akili_stores?scope=eq.${encodeURIComponent(scope)}&key=eq.${cleQuota}&select=data`);
-    if (Array.isArray(lignes) && lignes[0]?.data?.count) utilises = Number(lignes[0].data.count) || 0;
+    const orgs = await sbGet(`organizations?id=eq.${orgId}&select=plan`);
+    if (Array.isArray(orgs) && orgs[0]?.plan) plan = orgs[0].plan;
+
+    const q = await sbGet(`ai_quotas?org_id=eq.${orgId}&month=eq.${mois}&select=count`);
+    if (Array.isArray(q) && q[0]?.count) utilises = Number(q[0].count) || 0;
   }
 
   const plafond = QUOTAS[plan] || QUOTAS.starter;
   if (!enPhaseTest() && utilises >= plafond) {
     return json(res, 429, {
-      error: `Quota IA épuisé pour ce mois (${plafond} requêtes incluses dans l'offre ${plan}).`,
+      error: `Quota IA épuisé pour ce mois (${plafond} requêtes incluses dans l'offre ${plan}, partagées par toute l'entreprise).`,
       quota: { plan, utilises, plafond, restant: 0 },
     });
   }
@@ -141,18 +147,14 @@ export default async function handler(req, res) {
   // déjà payée. On journalise et on continue.
   if (SB_SVC) {
     try {
-      await fetch(`${SB_URL}/rest/v1/akili_stores`, {
+      await fetch(`${SB_URL}/rest/v1/ai_quotas?on_conflict=org_id,month`, {
         method: "POST",
         headers: {
           apikey: SB_SVC, Authorization: `Bearer ${SB_SVC}`,
           "content-type": "application/json",
           Prefer: "resolution=merge-duplicates",
         },
-        body: JSON.stringify({
-          scope, key: cleQuota,
-          data: { count: utilises + 1 },
-          updated_at: new Date().toISOString(),
-        }),
+        body: JSON.stringify({ org_id: orgId, month: mois, count: utilises + 1 }),
       });
     } catch (e) { console.error("quota", e?.message); }
   }
