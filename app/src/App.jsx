@@ -85,6 +85,28 @@ const actif = () => SB_OK && !!sb();
 const TABLE = "akili_stores";
 const MODULES_ORG = ["docs","clients","stocks","mvts","employes","paie","ecrit","fourn","achats","projets","sign"];
 
+// ─── APPEL À L'IA ─────────────────────────────────────────────────
+// Passe par /api/ia, jamais directement par api.anthropic.com :
+// la clé reste sur le serveur, et le quota y est décompté hors de
+// portée du navigateur.
+async function appelIA({system,messages}){
+  const c=sb();
+  if(!c) throw new Error("L'assistant IA nécessite un compte. En mode démo, il est indisponible.");
+  let jeton=null;
+  try{ const {data}=await c.auth.getSession(); jeton=data?.session?.access_token; }catch{}
+  if(!jeton) throw new Error("Session expirée. Reconnectez-vous.");
+  let r,d;
+  try{
+    r=await fetch("/api/ia",{method:"POST",
+      headers:{"content-type":"application/json",Authorization:`Bearer ${jeton}`},
+      body:JSON.stringify({system,messages})});
+    d=await r.json().catch(()=>({}));
+  }catch{ throw new Error("Assistant injoignable. Vérifiez votre connexion."); }
+  if(!r.ok) throw new Error(d?.error||"L'assistant n'a pas pu répondre.");
+  if(!d?.texte) throw new Error("Réponse vide de l'assistant.");
+  return d;
+}
+
 // ─── STORAGE ──────────────────────────────────────────────────────
 // API SYNCHRONE : les 7 modules lisent et écrivent comme avant.
 //   lecture  → cache mémoire, alimenté par une copie locale + Realtime
@@ -421,7 +443,8 @@ const PLAN_OHADA = {
   "521":"Banque",                    "531":"Mobile Money",
   "571":"Caisse",
   // Classe 6 — Charges
-  "601":"Achats de marchandises",    "605":"Autres achats",
+  "601":"Achats de marchandises",    "603":"Variations de stocks",
+  "605":"Autres achats",
   "622":"Loyers et charges locatives","626":"Télécommunications",
   "631":"Frais bancaires",           "641":"Impôts et taxes",
   "661":"Rémunérations du personnel","664":"Charges sociales patronales",
@@ -557,6 +580,28 @@ const Compta = {
   },
 };
 
+// ─── Conversion des devises ───────────────────────────────────────
+// 1 EUR = 655,957 FCFA : parité fixe, garantie par le Trésor français,
+// inchangée depuis 1999. On peut la figer sans risque.
+// Le dollar, lui, flotte : pas de valeur codée en dur qui vieillirait
+// mal. Tant que le taux n'est pas saisi, la facture n'est pas
+// comptabilisée et l'utilisateur est prévenu — mieux vaut un trou
+// signalé qu'un chiffre d'affaires faux.
+const PARITE_EUR = 655.957;
+const tauxUSD = (orgId) => Number(Store.get(`akili_taux_${orgId}`,{usd:""})?.usd||0);
+function versFCFA(montant, devise, orgId){
+  const m=Number(montant||0);
+  if(!m) return {montant:0,ok:true};
+  if(devise==="FCFA"||devise==="XOF") return {montant:Math.round(m),ok:true};
+  if(devise==="EUR") return {montant:Math.round(m*PARITE_EUR),ok:true,note:`${fmtN(m)} EUR × ${PARITE_EUR}`};
+  if(devise==="USD"){
+    const t=tauxUSD(orgId);
+    if(!t) return {montant:0,ok:false,raison:"Taux USD non renseigné — onglet OHADA, vue Contrôles."};
+    return {montant:Math.round(m*t),ok:true,note:`${fmtN(m)} USD × ${t}`};
+  }
+  return {montant:0,ok:false,raison:`Devise ${devise} non gérée.`};
+}
+
 // ─── Écritures automatiques ───────────────────────────────────────
 // Chaque pièce (facture, achat, bulletin) porte un identifiant `src`.
 // Reposter la même pièce remplace ses écritures au lieu de les
@@ -674,6 +719,13 @@ function Disclaimer({onAccept}){
           <div>{EDITEUR.siege}</div>
           <div>{EDITEUR.tel} · {EDITEUR.email} · {EDITEUR.site}</div>
           <div style={{marginTop:7,fontSize:12}}>{EDITEUR.droit}</div>
+          <div style={{marginTop:7,fontSize:13}}>
+            <a href="https://akili.africavit.com/cgu.html" target="_blank" rel="noopener" style={{color:T.accent}}>Conditions d'utilisation</a>
+            {" · "}
+            <a href="https://akili.africavit.com/cgv.html" target="_blank" rel="noopener" style={{color:T.accent}}>Conditions de vente</a>
+            {" · "}
+            <a href="https://akili.africavit.com/politique-confidentialite.html" target="_blank" rel="noopener" style={{color:T.accent}}>Confidentialité</a>
+          </div>
         </div>
       </Card>
     </div>
@@ -1046,7 +1098,20 @@ function StocksTab({orgId,user,notify}){
     const newQty=Number(prod.quantite||0)+delta;
     if(newQty<0){ setMvtErr({quantite:"Stock insuffisant (disponible: "+prod.quantite+")"}); return; }
     saveS(stocks.map(s=>s.id===mvtForm.produitId?{...s,quantite:newQty}:s));
-    saveM([{...mvtForm,id:newId("MVT"),produitNom:prod.nom,ancienStock:Number(prod.quantite),nouveauStock:newQty},...mouvts]);
+    const mvt={...mvtForm,id:newId("MVT"),produitNom:prod.nom,ancienStock:Number(prod.quantite),nouveauStock:newQty};
+    saveM([mvt,...mouvts]);
+    // Inventaire permanent : une entrée augmente le stock (311) en
+    // contrepartie du compte de variation (603), une sortie fait
+    // l'inverse. Le résultat n'est juste que si les deux existent.
+    const valeur=Math.round(Math.abs(delta)*Number(prod.prixAchat||0));
+    if(valeur>0){
+      const lib=`${mvtForm.type==="entree"?"Entrée":"Sortie"} stock — ${prod.nom}${mvtForm.motif?` (${mvtForm.motif})`:""}`;
+      posterEcritures(orgId,mvt.id, mvtForm.type==="entree"
+        ? [{date:mvtForm.date,libelle:lib,piece:mvt.id,compte:"311",debit:valeur,credit:0},
+           {date:mvtForm.date,libelle:lib,piece:mvt.id,compte:"603",debit:0,credit:valeur}]
+        : [{date:mvtForm.date,libelle:lib,piece:mvt.id,compte:"603",debit:valeur,credit:0},
+           {date:mvtForm.date,libelle:lib,piece:mvt.id,compte:"311",debit:0,credit:valeur}]);
+    }
     setMvtForm({produitId:"",type:"entree",quantite:"",motif:"",date:today()});
     notify(`✅ Mouvement enregistré — Nouveau stock : ${newQty} ${prod.unite}`);
   };
@@ -1473,21 +1538,25 @@ function DocsTab({orgId,user,plan,notify,onUpgrade}){
     const num=newId(docType.toUpperCase().slice(0,3));
     const prompt=`Génère un ${docType} professionnel N°${num} daté du ${today()} :\nClient: ${form.client} | Service: ${form.service} | Montant: ${fmtN(form.montant)} ${form.devise}\nPrestataire: ${user.entreprise||"Mon entreprise"}\nConditions: 50% signature, 50% livraison${form.details?" | "+form.details:""}\nNote bas de page: "Document généré par AKILI ERP — ${EDITEUR.nom} (RCCM ${EDITEUR.rccm}) à titre indicatif — à valider par un professionnel qualifié."`;
     try{
-      const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system:SYSTEM,messages:[{role:"user",content:prompt}]})});
-      if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.error?.message||`Erreur API (${r.status})`);}
-      const d=await r.json();if(d.error) throw new Error(d.error.message);
-      const txt=d.content?.[0]?.text||"";if(!txt) throw new Error("Réponse vide");
+      const d=await appelIA({system:SYSTEM,messages:[{role:"user",content:prompt}]});
+      const txt=d.texte;
       const doc={id:num,type:docType,client:form.client,montant:form.montant,devise:form.devise,date:today(),content:txt,owner:user.uid};
       setGen(txt);save([doc,...docs]);
       // Seule une facture engendre une vente : un devis n'est pas une
       // créance tant qu'il n'est pas accepté, et le comptabiliser
       // gonflerait artificiellement le chiffre d'affaires.
-      if(docType==="facture" && doc.devise==="FCFA" && Number(doc.montant)>0){
-        posterEcritures(orgId,doc.id,ecrituresVente({
-          date:doc.date, libelle:`Facture ${doc.client||"client"}`, piece:doc.id,
-          montantHT:Number(doc.montant), tauxTVA:18, compteProduit:"706",
-        }));
-        notify("📒 Facture comptabilisée (411 / 706 / 443)");
+      if(docType==="facture" && Number(doc.montant)>0){
+        const conv=versFCFA(doc.montant,doc.devise,orgId);
+        if(conv.ok){
+          posterEcritures(orgId,doc.id,ecrituresVente({
+            date:doc.date,
+            libelle:`Facture ${doc.client||"client"}${conv.note?` — ${conv.note}`:""}`,
+            piece:doc.id, montantHT:conv.montant, tauxTVA:18, compteProduit:"706",
+          }));
+          notify("📒 Facture comptabilisée (411 / 706 / 443)");
+        }else{
+          notify("⚠️ Non comptabilisée : "+conv.raison,T.accent);
+        }
       }
       notify("✅ Document généré et sauvegardé !");
     }catch(e){setApiErr(e.message||"Erreur de génération.");}
@@ -1602,6 +1671,7 @@ function ComptaTab({orgId,user,notify}){
   const [errors,setErrors]=useState({});
   const vide={date:today(),libelle:"",compte:"521",debit:"",credit:"",piece:""};
   const [form,setForm]=useState(vide);
+  const [taux,setTaux]=useState(()=>String(tauxUSD(orgId)||""));
 
   const save=l=>{setEcritures(l);Store.set(KEY,l);};
 
@@ -1888,6 +1958,27 @@ function ComptaTab({orgId,user,notify}){
           Ces contrôles sont mécaniques. Ils ne remplacent pas la validation d'un
           expert-comptable agréé ONECCA-CI, qui seul engage sa responsabilité.
         </div>
+
+        <div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${T.border}`}}>
+          <div style={{fontSize:16,fontWeight:700,color:T.text,marginBottom:4}}>Taux de change</div>
+          <div style={{fontSize:14,color:T.muted,lineHeight:1.65,marginBottom:10}}>
+            L'euro est en parité fixe avec le franc CFA : 1 EUR = {PARITE_EUR} FCFA, inchangé
+            depuis 1999. Le dollar flotte, il faut donc le saisir — sinon une facture en USD
+            n'est pas comptabilisée, et l'application vous le signale plutôt que d'inventer
+            un chiffre d'affaires.
+          </div>
+          <Inp label="1 USD = ... FCFA" value={taux} onChange={setTaux} placeholder="Ex. 580"/>
+          <Btn sm onClick={()=>{
+            const v=Number(taux);
+            if(!v||v<=0){ notify("⚠️ Taux invalide",T.red); return; }
+            Store.set(`akili_taux_${orgId}`,{usd:v,maj:today()});
+            notify("✅ Taux USD enregistré");
+          }}>✓ Enregistrer le taux</Btn>
+          {!!tauxUSD(orgId) && <div style={{fontSize:13,color:T.muted,marginTop:7}}>
+            Taux actuel : 1 USD = {fmtN(tauxUSD(orgId))} FCFA
+            {Store.get(`akili_taux_${orgId}`,{})?.maj ? ` · saisi le ${Store.get(`akili_taux_${orgId}`,{}).maj}` : ""}
+          </div>}
+        </div>
       </Card>}
 
       {/* ── EXPORT ── */}
@@ -1926,10 +2017,8 @@ function ChatTab({user,plan,notify,onUpgrade}){
     if(!QM.can(user.uid,plan)){notify("🚫 Quota IA épuisé",T.red);onUpgrade();return;}
     const next=[...msgs,{role:"user",content:input}];saveMsgs(next);setInput("");setLoad(true);setApiErr("");QM.inc(user.uid);
     try{
-      const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system:SYSTEM,messages:next.slice(-20).map(m=>({role:m.role,content:m.content}))})});
-      if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.error?.message||`Erreur (${r.status})`);}
-      const d=await r.json();if(d.error) throw new Error(d.error.message);
-      const txt=d.content?.[0]?.text;if(!txt) throw new Error("Réponse vide");
+      const d=await appelIA({system:SYSTEM,messages:next.slice(-20).map(m=>({role:m.role,content:m.content}))});
+      const txt=d.texte;
       saveMsgs([...next,{role:"assistant",content:txt}]);
     }catch(e){setApiErr(e.message);saveMsgs([...next,{role:"assistant",content:`❌ Erreur : ${e.message}`}]);}
     setLoad(false);
