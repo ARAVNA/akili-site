@@ -3,6 +3,14 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+
+  // Vite n'expose au navigateur que les variables préfixées VITE_.
+  // Le projet Vercel qui sert akilierp.africavit.com porte déjà, depuis
+  // l'application précédente, NEXT_PUBLIC_SUPABASE_URL et
+  // NEXT_PUBLIC_SUPABASE_ANON_KEY. Les accepter évite de redemander les
+  // mêmes valeurs sous un autre nom — et évite surtout qu'une des deux
+  // copies soit un jour mise à jour sans l'autre.
+  envPrefix: ["VITE_", "NEXT_PUBLIC_"],
   build: {
     outDir: "dist",
     sourcemap: false,

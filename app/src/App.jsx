@@ -77,8 +77,11 @@ const joursRestants = () => Math.max(0, Math.ceil((PHASE_TEST_FIN - new Date()) 
 // le quota de requêtes.
 // ═══════════════════════════════════════════════════════════════════
 
-const SB_URL  = import.meta.env.VITE_SUPABASE_URL;
-const SB_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY;
+// Deux noms acceptés pour la même valeur : VITE_… si on repart de zéro,
+// NEXT_PUBLIC_… parce que le projet Vercel les porte déjà depuis
+// l'application précédente. Une seule des deux suffit.
+const SB_URL  = import.meta.env.VITE_SUPABASE_URL      || import.meta.env.NEXT_PUBLIC_SUPABASE_URL;
+const SB_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const SB_OK   = Boolean(SB_URL && SB_ANON);
 
 let _sb = null;
