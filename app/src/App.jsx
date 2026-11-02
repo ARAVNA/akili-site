@@ -385,6 +385,9 @@ const traduire = (e)=>{
   if(m.includes("invalid login"))       return "Email ou mot de passe incorrect.";
   if(m.includes("already registered"))  return "Un compte existe déjà avec cet email.";
   if(m.includes("email not confirmed")) return "Email non confirmé — vérifiez votre boîte de réception.";
+  if(m.includes("should be different")) return "Choisissez un mot de passe différent de l'ancien.";
+  if(m.includes("expired")||m.includes("invalid or has expired")) return "Ce lien a expiré. Demandez-en un nouveau depuis « Mot de passe oublié ».";
+  if(m.includes("session")&&m.includes("missing")) return "Lien invalide ou déjà utilisé. Demandez-en un nouveau.";
   if(m.includes("password"))            return "Mot de passe trop faible (6 caractères minimum).";
   if(m.includes("rate limit")||m.includes("too many")) return "Trop de tentatives. Réessayez dans quelques minutes.";
   if(m.includes("row-level security")||m.includes("permission")) return "Accès refusé — vérifiez les politiques RLS.";
@@ -392,9 +395,42 @@ const traduire = (e)=>{
   return e?.message||"Une erreur est survenue.";
 };
 
+// Le lien « mot de passe oublié » reçu par email ramène ici avec un jeton
+// dans l'adresse. Supabase ouvre alors une vraie session — c'est pratique,
+// mais dangereux si on laisse entrer directement : la personne arriverait
+// dans son tableau de bord sans avoir choisi de nouveau mot de passe, et
+// se retrouverait enfermée dehors à la session suivante. On reconnaît donc
+// ce lien AVANT tout, de façon synchrone, pour que l'écran « nouveau mot
+// de passe » gagne la course contre la restauration de session.
+const lienRecuperation = ()=>{
+  try{
+    const h=new URLSearchParams((window.location.hash||"").replace(/^#/,""));
+    const q=new URLSearchParams(window.location.search||"");
+    return h.get("type")==="recovery" || q.get("type")==="recovery";
+  }catch{ return false; }
+};
+// Un lien périmé revient avec une erreur plutôt qu'un jeton. On la lit pour
+// l'expliquer, au lieu de laisser un écran vide.
+const erreurLien = ()=>{
+  try{
+    const h=new URLSearchParams((window.location.hash||"").replace(/^#/,""));
+    const q=new URLSearchParams(window.location.search||"");
+    const code=h.get("error_code")||q.get("error_code")||h.get("error")||q.get("error");
+    if(!code) return "";
+    if(String(code).includes("expired")) return "Ce lien a expiré. Les liens ne sont valables qu'une heure — demandez-en un nouveau.";
+    return "Ce lien n'est plus valable. Demandez-en un nouveau.";
+  }catch{ return ""; }
+};
+
 function AuthProvider({children}){
   const [user,setUser]=useState(null);
   const [boot,setBoot]=useState(true);
+  // Initialisé de façon synchrone : voir lienRecuperation() ci-dessus.
+  const [recup,setRecup]=useState(()=>SB_OK&&lienRecuperation());
+  // Le même drapeau, lisible depuis l'écouteur Supabase : celui-ci est
+  // installé une seule fois et ne verrait jamais la valeur à jour de
+  // l'état React.
+  const recupRef=useRef(SB_OK&&lienRecuperation());
   const mode = SB_OK ? "supabase" : "demo";
 
   // Charge le profil depuis la table `profiles`, et la crée au besoin.
@@ -425,9 +461,14 @@ function AuthProvider({children}){
       setUser(u); setBoot(false);
       return;
     }
+    const venuDUnLien = lienRecuperation();
     (async()=>{
       const {data:{session}}=await sb().auth.getSession();
       if(!vivant) return;
+      // Arrivée par un lien de récupération : la session existe (elle est
+      // nécessaire pour changer le mot de passe) mais on n'ouvre pas le
+      // tableau de bord. L'écran NouveauMotDePasse prend le relais.
+      if(venuDUnLien){ setBoot(false); return; }
       if(session?.user){
         const p=await chargerProfil(session.user);
         await Store.bind({uid:p.uid,orgId:p.orgId});
@@ -435,9 +476,14 @@ function AuthProvider({children}){
       }
       if(vivant) setBoot(false);
     })();
-    const {data:{subscription}}=sb().auth.onAuthStateChange(async(_e,session)=>{
+    const {data:{subscription}}=sb().auth.onAuthStateChange(async(ev,session)=>{
       if(!vivant) return;
+      // Deuxième filet : selon la version de Supabase, le jeton arrive
+      // parfois sous une forme qui ne porte pas « type=recovery » dans
+      // l'adresse. Cet événement, lui, est toujours émis.
+      if(ev==="PASSWORD_RECOVERY"){ recupRef.current=true; setRecup(true); setBoot(false); return; }
       if(!session?.user){ await Store.clear(); setUser(null); setBoot(false); return; }
+      if(recupRef.current){ setBoot(false); return; }
       const p=await chargerProfil(session.user);
       await Store.bind({uid:p.uid,orgId:p.orgId});
       setUser(p); setBoot(false);
@@ -479,10 +525,40 @@ function AuthProvider({children}){
     saveLocal({...us[email]}); return us[email];
   };
 
+  // Envoie le lien de réinitialisation.
+  //
+  // Le retour doit viser l'APPLICATION et non la racine du domaine :
+  // depuis la réunification des deux adresses, akilierp.africavit.com/
+  // affiche la présentation du produit et l'application vit sous /app.
+  // Un lien pointant vers la racine ramènerait sur la plaquette
+  // commerciale, sans jamais demander le nouveau mot de passe.
+  // origin + pathname reproduit exactement la page courante : /app en
+  // production, / en développement local.
   const resetPassword=async(email)=>{
+    const propre=(email||"").trim();
+    if(!/\S+@\S+\.\S+/.test(propre)) throw new Error("Entrez une adresse email valide.");
     if(!SB_OK) throw new Error("Disponible une fois Supabase configuré.");
-    const {error}=await sb().auth.resetPasswordForEmail(email,{ redirectTo:window.location.origin });
+    const retour=window.location.origin+window.location.pathname;
+    const {error}=await sb().auth.resetPasswordForEmail(propre,{ redirectTo:retour });
     if(error) throw new Error(traduire(error));
+  };
+
+  // Enregistre le nouveau mot de passe, puis ouvre la session.
+  const definirMotDePasse=async(pass)=>{
+    if(!pass||pass.length<6) throw new Error("Mot de passe : 6 caractères minimum.");
+    if(!SB_OK) throw new Error("Disponible une fois Supabase configuré.");
+    const {error}=await sb().auth.updateUser({ password:pass });
+    if(error) throw new Error(traduire(error));
+    // Effacer le jeton de l'adresse : sans cela, un simple rechargement
+    // de la page rejouerait le lien et redemanderait un mot de passe.
+    try{ window.history.replaceState({},"",window.location.pathname); }catch{}
+    recupRef.current=false; setRecup(false);
+    const {data:{session}}=await sb().auth.getSession();
+    if(session?.user){
+      const p=await chargerProfil(session.user);
+      await Store.bind({uid:p.uid,orgId:p.orgId});
+      setUser(p);
+    }
   };
 
   const logout=async()=>{
@@ -501,7 +577,7 @@ function AuthProvider({children}){
     }
   };
 
-  return <AuthCtx.Provider value={{user,boot,mode,register,login,logout,upgradePlan,resetPassword}}>{children}</AuthCtx.Provider>;
+  return <AuthCtx.Provider value={{user,boot,mode,recup,register,login,logout,upgradePlan,resetPassword,definirMotDePasse}}>{children}</AuthCtx.Provider>;
 }
 
 // ─── UTILS ────────────────────────────────────────────────────────
@@ -866,9 +942,12 @@ function ModeBadge({mode}){
 
 export default function App(){ return <AuthProvider><AppInner/></AuthProvider>; }
 function AppInner(){
-  const {user,boot,mode}=useAuth();
+  const {user,boot,mode,recup}=useAuth();
   const [disc,setDisc]=useState(()=>!!localStorage.getItem("akili_disc"));
   if(boot) return <Splash/>;
+  // Avant tout le reste : un lien de récupération doit aboutir au choix
+  // du mot de passe, même si une session est déjà ouverte.
+  if(recup) return <><NouveauMotDePasse/><ModeBadge mode={mode}/></>;
   if(!user) return <><AuthScreen/><ModeBadge mode={mode}/></>;
   if(!disc) return <><Disclaimer onAccept={()=>{localStorage.setItem("akili_disc","1");setDisc(true);}}/><style>{CSS}</style></>;
   return <Dashboard/>;
@@ -876,13 +955,40 @@ function AppInner(){
 
 // ─── AUTH SCREEN ──────────────────────────────────────────────────
 function AuthScreen(){
-  const {login,register}=useAuth();
+  const {login,register,resetPassword}=useAuth();
   const [mode,setMode]=useState("login");
   const [email,setEmail]=useState(""); const [pass,setPass]=useState("");
   const [name,setName]=useState(""); const [ent,setEnt]=useState("");
   const [errors,setErrors]=useState({}); const [msg,setMsg]=useState(""); const [load,setLoad]=useState(false);
-  const validate=()=>{ const e={}; if(!email) e.email="Email requis"; else if(!/\S+@\S+\.\S+/.test(email)) e.email="Format invalide"; if(!pass) e.pass="Requis"; else if(pass.length<6) e.pass="6 caractères min."; if(mode==="register"&&!name) e.name="Nom requis"; setErrors(e); return!Object.keys(e).length; };
-  const handle=async()=>{ setMsg(""); if(!validate()) return; setLoad(true); try{ if(mode==="login") await login(email,pass); else{ await register(email,pass,name,ent); setMsg("✅ Compte créé !"); } }catch(e){ setErrors({global:e.message}); } setLoad(false); };
+  // Un lien périmé ramène ici avec une erreur dans l'adresse : on
+  // l'explique plutôt que d'afficher un écran de connexion muet.
+  const [lien]=useState(erreurLien);
+  const oubli = mode==="forgot";
+  const changer=m=>{ setMode(m); setErrors({}); setMsg(""); setPass(""); };
+  const validate=()=>{
+    const e={};
+    if(!email) e.email="Email requis"; else if(!/\S+@\S+\.\S+/.test(email)) e.email="Format invalide";
+    // En mode « mot de passe oublié », il n'y a justement pas de mot de
+    // passe à saisir : l'exiger bloquerait la seule issue de secours.
+    if(!oubli){ if(!pass) e.pass="Requis"; else if(pass.length<6) e.pass="6 caractères min."; }
+    if(mode==="register"&&!name) e.name="Nom requis";
+    setErrors(e); return!Object.keys(e).length;
+  };
+  const handle=async()=>{
+    setMsg(""); if(!validate()) return; setLoad(true);
+    try{
+      if(mode==="login")      await login(email,pass);
+      else if(mode==="register"){ await register(email,pass,name,ent); setMsg("✅ Compte créé !"); }
+      else{
+        await resetPassword(email);
+        // Message volontairement identique que le compte existe ou non :
+        // révéler quelles adresses sont inscrites donnerait à un inconnu
+        // la liste des clients.
+        setMsg("📩 Si un compte existe avec cette adresse, un lien vient d'être envoyé. Vérifiez votre boîte de réception, et les indésirables. Le lien est valable une heure.");
+      }
+    }catch(e){ setErrors({global:e.message}); }
+    setLoad(false);
+  };
   return(
     <div style={{minHeight:"100vh",background:T.bg,display:"flex",alignItems:"center",justifyContent:"center",padding:16,backgroundImage:`radial-gradient(ellipse at 20% 50%,${T.accentG} 0%,transparent 55%)`}}>
       <div style={{width:"100%",maxWidth:360}}>
@@ -892,18 +998,69 @@ function AuthScreen(){
           <div style={{fontSize:15,color:T.muted,marginTop:3}}>Gestion · Stocks · RH · OHADA · IA</div>
         </div>
         <Card style={{padding:22}}>
-          <div style={{fontWeight:800,fontSize:18,marginBottom:14}}>{mode==="login"?"Connexion":"Créer un compte"}</div>
+          <div style={{fontWeight:800,fontSize:18,marginBottom:14}}>{mode==="login"?"Connexion":mode==="register"?"Créer un compte":"Mot de passe oublié"}</div>
+          {oubli&&<div style={{fontSize:15,color:T.muted,marginBottom:14,lineHeight:1.5}}>Entrez l'adresse email de votre compte. Vous recevrez un lien pour choisir un nouveau mot de passe.</div>}
+          {lien&&<div style={{padding:"9px 13px",background:T.red+"15",border:`1px solid ${T.red}33`,borderRadius:7,color:T.red,fontSize:15,marginBottom:12,lineHeight:1.45}}>⚠ {lien}</div>}
           {mode==="register"&&<Inp label="Nom complet" value={name} onChange={setName} placeholder="DIBY Honoré" required error={errors.name}/>}
           {mode==="register"&&<Inp label="Entreprise" value={ent} onChange={setEnt} placeholder="Nom de votre entreprise"/>}
           <Inp label="Email" value={email} onChange={v=>{setEmail(v);setErrors(p=>({...p,email:""}));}} placeholder="vous@imedia.ci" type="email" required error={errors.email}/>
-          <Inp label="Mot de passe" value={pass} onChange={v=>{setPass(v);setErrors(p=>({...p,pass:""}));}} placeholder="Min. 6 caractères" type="password" required error={errors.pass}/>
+          {!oubli&&<Inp label="Mot de passe" value={pass} onChange={v=>{setPass(v);setErrors(p=>({...p,pass:""}));}} placeholder="Min. 6 caractères" type="password" required error={errors.pass}/>}
+          {mode==="login"&&(
+            <div style={{textAlign:"right",marginTop:-6,marginBottom:10}}>
+              <span onClick={()=>changer("forgot")} style={{color:T.accent,cursor:"pointer",fontWeight:700,fontSize:15}}>Mot de passe oublié ?</span>
+            </div>
+          )}
           {errors.global&&<div style={{padding:"9px 13px",background:T.red+"15",border:`1px solid ${T.red}33`,borderRadius:7,color:T.red,fontSize:16,marginBottom:10}}>⚠ {errors.global}</div>}
-          {msg&&<div style={{padding:"9px 13px",background:T.green+"15",border:`1px solid ${T.green}33`,borderRadius:7,color:T.green,fontSize:16,marginBottom:10}}>{msg}</div>}
-          <Btn onClick={handle} disabled={load} full style={{padding:16,marginTop:4}}>{load?"⏳...":mode==="login"?"🔐 Se connecter":"✨ Créer mon compte"}</Btn>
+          {msg&&<div style={{padding:"9px 13px",background:T.green+"15",border:`1px solid ${T.green}33`,borderRadius:7,color:T.green,fontSize:15,marginBottom:10,lineHeight:1.45}}>{msg}</div>}
+          <Btn onClick={handle} disabled={load} full style={{padding:16,marginTop:4}}>{load?"⏳...":mode==="login"?"🔐 Se connecter":mode==="register"?"✨ Créer mon compte":"📩 Envoyer le lien"}</Btn>
           <div style={{marginTop:12,textAlign:"center",fontSize:16,color:T.muted}}>
-            {mode==="login"?"Pas encore de compte ? ":"Déjà un compte ? "}
-            <span onClick={()=>{setMode(mode==="login"?"register":"login");setErrors({});setMsg("");}} style={{color:T.accent,cursor:"pointer",fontWeight:700}}>{mode==="login"?"S'inscrire":"Se connecter"}</span>
+            {oubli
+              ? <span onClick={()=>changer("login")} style={{color:T.accent,cursor:"pointer",fontWeight:700}}>← Retour à la connexion</span>
+              : <>
+                  {mode==="login"?"Pas encore de compte ? ":"Déjà un compte ? "}
+                  <span onClick={()=>changer(mode==="login"?"register":"login")} style={{color:T.accent,cursor:"pointer",fontWeight:700}}>{mode==="login"?"S'inscrire":"Se connecter"}</span>
+                </>}
           </div>
+        </Card>
+      </div>
+      <style>{CSS}</style>
+    </div>
+  );
+}
+
+// ─── NOUVEAU MOT DE PASSE ─────────────────────────────────────────
+// Affiché uniquement à l'arrivée d'un lien de récupération. La session
+// est déjà ouverte côté Supabase, mais on ne laisse pas entrer avant que
+// le mot de passe soit choisi : sinon la personne ressortirait sans
+// pouvoir revenir.
+function NouveauMotDePasse(){
+  const {definirMotDePasse}=useAuth();
+  const [p1,setP1]=useState(""); const [p2,setP2]=useState("");
+  const [errors,setErrors]=useState({}); const [load,setLoad]=useState(false);
+  const handle=async()=>{
+    const e={};
+    if(!p1) e.p1="Requis"; else if(p1.length<6) e.p1="6 caractères min.";
+    if(p1&&p2!==p1) e.p2="Les deux mots de passe ne correspondent pas";
+    setErrors(e); if(Object.keys(e).length) return;
+    setLoad(true);
+    try{ await definirMotDePasse(p1); }
+    catch(err){ setErrors({global:err.message}); }
+    setLoad(false);
+  };
+  return(
+    <div style={{minHeight:"100vh",background:T.bg,display:"flex",alignItems:"center",justifyContent:"center",padding:16,backgroundImage:`radial-gradient(ellipse at 20% 50%,${T.accentG} 0%,transparent 55%)`}}>
+      <div style={{width:"100%",maxWidth:360}}>
+        <div style={{textAlign:"center",marginBottom:22}}>
+          <div style={{width:60,height:60,borderRadius:18,background:`linear-gradient(135deg,${T.accent},${T.accentD})`,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:30,marginBottom:12}}>🔑</div>
+          <div style={{fontSize:26,fontWeight:800,color:T.text}}>AKILI ERP</div>
+        </div>
+        <Card style={{padding:22}}>
+          <div style={{fontWeight:800,fontSize:18,marginBottom:8}}>Choisissez un nouveau mot de passe</div>
+          <div style={{fontSize:15,color:T.muted,marginBottom:14,lineHeight:1.5}}>Notez-le quelque part de sûr. Vous en aurez besoin à chaque connexion.</div>
+          <Inp label="Nouveau mot de passe" value={p1} onChange={v=>{setP1(v);setErrors(e=>({...e,p1:""}));}} placeholder="Min. 6 caractères" type="password" required error={errors.p1}/>
+          <Inp label="Confirmer" value={p2} onChange={v=>{setP2(v);setErrors(e=>({...e,p2:""}));}} placeholder="Retapez le même" type="password" required error={errors.p2}/>
+          {errors.global&&<div style={{padding:"9px 13px",background:T.red+"15",border:`1px solid ${T.red}33`,borderRadius:7,color:T.red,fontSize:15,marginBottom:10,lineHeight:1.45}}>⚠ {errors.global}</div>}
+          <Btn onClick={handle} disabled={load} full style={{padding:16,marginTop:4}}>{load?"⏳...":"✅ Enregistrer et entrer"}</Btn>
         </Card>
       </div>
       <style>{CSS}</style>
@@ -2654,6 +2811,12 @@ function SignatureTab({orgId,user,notify}){
 const CSS=`
   @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap');
   *{font-family:'Outfit',sans-serif;box-sizing:border-box;}
+  /* Couleur de texte par défaut. Sans elle, tout élément qui ne fixe pas
+     sa propre couleur — les titres de cartes, par exemple « Connexion » —
+     héritait du noir du navigateur et devenait illisible sur le fond
+     sombre. Les composants qui définissent déjà leur couleur ne sont pas
+     affectés. */
+  body{color:${T.text};background:${T.bg};}
   ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:#202C3C;border-radius:2px}
   input::placeholder,textarea::placeholder{color:#8095AB}
   select option{background:#0C1219}
