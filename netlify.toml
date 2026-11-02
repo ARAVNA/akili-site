@@ -1,0 +1,43 @@
+# akili.africavit.com — Netlify
+#
+# Ce site ne publie plus de pages : le site vitrine et l'application
+# vivent désormais ensemble sur akilierp.africavit.com (vitrine à
+# l'accueil, application sur /app). Garder deux copies des mêmes pages
+# finissait par les faire diverger — un tarif corrigé d'un côté et pas
+# de l'autre.
+#
+# Le projet Netlify reste nécessaire pour une raison précise : la tâche
+# planifiée netlify/functions/supabase-keepalive.mjs interroge la base
+# chaque jour, faute de quoi Supabase met le projet gratuit en pause au
+# bout de sept jours d'inactivité.
+
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+# Les fonctions ne doivent pas être emportées par la redirection.
+[[redirects]]
+  from = "/.netlify/*"
+  to = "/.netlify/:splat"
+  status = 200
+
+# Cas particulier : sur l'ancien site, la page d'accueil s'appelait
+# index.html. Sur le nouveau, ce nom-là appartient à l'application.
+# Un ancien favori vers /index.html tomberait donc sur l'écran de
+# connexion au lieu de la présentation du produit. On l'envoie à
+# l'accueil.
+[[redirects]]
+  from = "/index.html"
+  to = "https://akilierp.africavit.com/"
+  status = 301
+  force = true
+
+# Tout le reste part vers le site unique, en conservant le chemin
+# demandé : une ancienne adresse comme /guide.html arrive sur
+# akilierp.africavit.com/guide.html, qui existe toujours.
+# 301 : les moteurs de recherche transfèrent le référencement acquis.
+[[redirects]]
+  from = "/*"
+  to = "https://akilierp.africavit.com/:splat"
+  status = 301
+  force = true
