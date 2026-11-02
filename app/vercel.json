@@ -6,5 +6,20 @@
   "outputDirectory": "dist",
   "installCommand": "npm install",
 
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "rewrites": [
+    {
+      "comment": "Accueil : le site vitrine, qui présente le produit. Un visiteur qui découvre AKILI doit comprendre ce que c'est avant de tomber sur un écran de connexion.",
+      "source": "/",
+      "destination": "/accueil.html"
+    },
+    {
+      "comment": "L'application. Toute adresse sous /app lui revient : elle gère sa navigation elle-même, sans rechargement de page.",
+      "source": "/app",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/app/(.*)",
+      "destination": "/index.html"
+    }
+  ]
 }
