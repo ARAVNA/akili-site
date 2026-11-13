@@ -4,6 +4,9 @@
 --
 -- Projet : phwefeudkkbzknxdjktb (akili.erp)
 --
+-- Après ce script, exécuter supabase-securite.sql (journal d'audit,
+-- incrément atomique des quotas, verrouillage des fonctions).
+--
 -- CE SCRIPT NE DÉTRUIT RIEN. Il ne fait qu'ajouter ce qui manque :
 -- tout est en CREATE IF NOT EXISTS ou ADD COLUMN IF NOT EXISTS.
 -- Vous pouvez le relancer sans risque.
@@ -236,7 +239,7 @@ do $$
 declare
   t text;
   tables text[] := array[
-    'achats','ai_quotas','clients','comptes_tresorerie','crm_leads',
+    'achats','clients','comptes_tresorerie','crm_leads',
     'documents','ecritures','efactures','employes',
     'fournisseurs','stocks','mouvements_stock','fiches_paie','projets',
     'signatures','taux_change'
@@ -262,7 +265,7 @@ do $$
 declare t text;
 begin
   foreach t in array array[
-    'organizations','profiles','achats','ai_quotas','clients',
+    'achats','clients',
     'comptes_tresorerie','crm_leads','documents','ecritures','efactures',
     'employes','fournisseurs','stocks','mouvements_stock','fiches_paie',
     'projets','signatures','taux_change'
@@ -277,11 +280,22 @@ grant execute on function public.mon_org() to authenticated;
 
 -- Le profil et l'entreprise suivent une règle différente : on lit son
 -- propre profil, et l'entreprise à laquelle on appartient.
+-- SÉCURITÉ : on ne laisse PAS « for all ». Un utilisateur qui pouvait
+-- modifier sa propre ligne entière pouvait changer son org_id (entrer dans
+-- l'entreprise d'un autre) ou son rôle. Seuls nom et cgu_acceptees_le sont
+-- modifiables ; le reste ne change que côté serveur (service_role).
 alter table public.profiles enable row level security;
 drop policy if exists "akili_profil" on public.profiles;
-create policy "akili_profil" on public.profiles
-  for all to authenticated
+drop policy if exists "akili_profil_lecture" on public.profiles;
+drop policy if exists "akili_profil_maj" on public.profiles;
+create policy "akili_profil_lecture" on public.profiles
+  for select to authenticated using (id = auth.uid());
+create policy "akili_profil_maj" on public.profiles
+  for update to authenticated
   using (id = auth.uid()) with check (id = auth.uid());
+revoke insert, update, delete on public.profiles from authenticated;
+grant select on public.profiles to authenticated;
+grant update (nom, cgu_acceptees_le) on public.profiles to authenticated;
 
 alter table public.organizations enable row level security;
 drop policy if exists "akili_org_lecture" on public.organizations;
@@ -292,6 +306,26 @@ drop policy if exists "akili_org_maj" on public.organizations;
 create policy "akili_org_maj" on public.organizations
   for update to authenticated
   using (id = public.mon_org()) with check (id = public.mon_org());
+-- SÉCURITÉ : « plan » ne se change pas depuis le navigateur (sinon : offre
+-- enterprise gratuite). Seules les coordonnées de l'entreprise sont modifiables.
+revoke insert, update, delete on public.organizations from authenticated;
+grant select on public.organizations to authenticated;
+grant update (nom, rccm, ncc, idu, adresse, tel, email) on public.organizations to authenticated;
+
+-- Quotas IA : lecture seule côté navigateur ; l'écriture est réservée au
+-- serveur (/api/ia, clé service_role). Sinon un membre remet son compteur à 0.
+do $$
+begin
+  if to_regclass('public.ai_quotas') is not null then
+    alter table public.ai_quotas enable row level security;
+    drop policy if exists "akili_org" on public.ai_quotas;
+    drop policy if exists "akili_quota_lecture" on public.ai_quotas;
+    create policy "akili_quota_lecture" on public.ai_quotas
+      for select to authenticated using (org_id = public.mon_org());
+    revoke insert, update, delete on public.ai_quotas from authenticated;
+    grant select on public.ai_quotas to authenticated;
+  end if;
+end $$;
 
 
 -- ─── 5. RATTRAPAGE DES COMPTES DÉJÀ CRÉÉS ─────────────────────────

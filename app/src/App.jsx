@@ -1,7 +1,9 @@
-import { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-         PieChart, Pie, Cell, LineChart, Line, CartesianGrid, AreaChart, Area } from "recharts";
+import { useState, useEffect, useRef, useCallback, createContext, useContext, lazy, Suspense } from "react";
 import { createClient } from "@supabase/supabase-js";
+
+// Chargés à la demande : recharts n'est pas nécessaire au premier écran.
+const GraphTresorerie = lazy(() => import("./Graphiques.jsx").then(m => ({ default: m.GraphTresorerie })));
+const GraphTypes      = lazy(() => import("./Graphiques.jsx").then(m => ({ default: m.GraphTypes })));
 
 // ═══════════════════════════════════════════════════════════════════
 // AKILI ERP v8 — ÉDITION COMPLÈTE
@@ -14,9 +16,9 @@ import { createClient } from "@supabase/supabase-js";
 const T = {
   bg:"#05080F", card:"#0C1219", card2:"#101820", border:"#202C3C",
   // Une seule couleur d'accent : l'or sombre
-  accent:"#D9A441", accentD:"#8A6520", accentG:"#D9A4411A",
+  accent:"#D9A441", accentD:"#B08430", accentG:"#D9A4411A",
   // Deux couleurs de sens uniquement (positif / negatif), volontairement sourdes
-  green:"#6E9E7C", red:"#C4635E",
+  green:"#6E9E7C", red:"#D4726C",
   // Les anciennes couleurs vives sont neutralisees
   blue:"#8DA2B8", purple:"#8DA2B8", orange:"#D9A441",
   cyan:"#8DA2B8", indigo:"#8DA2B8",
@@ -871,7 +873,7 @@ function ecrituresPaie({date,libelle,piece,brut,cnpsSalarie,cnpsPatronal,its,net
 
 // ─── BASE UI ──────────────────────────────────────────────────────
 const Btn=({children,onClick,variant="primary",disabled,full,sm,style={}})=>(
-  <button onClick={onClick} disabled={disabled} style={{padding:sm?"7px 14px":"12px 20px",borderRadius:8,cursor:disabled?"not-allowed":"pointer",fontFamily:"inherit",fontSize:sm?15:17,fontWeight:700,transition:"all .18s",width:full?"100%":"auto",background:variant==="primary"?`linear-gradient(135deg,${T.accent},${T.accentD})`:variant==="danger"?T.red:variant==="green"?T.green:variant==="blue"?T.blue:variant==="ghost"?"transparent":T.light,color:variant==="primary"?"#000":variant==="ghost"?T.muted:T.text,border:variant==="ghost"?`1px solid ${T.border}`:"none",opacity:disabled?.5:1,...style}}>{children}</button>
+  <button onClick={onClick} disabled={disabled} style={{padding:sm?"7px 14px":"12px 20px",borderRadius:8,cursor:disabled?"not-allowed":"pointer",fontFamily:"inherit",fontSize:sm?15:17,fontWeight:700,transition:"all .18s",width:full?"100%":"auto",background:variant==="primary"?`linear-gradient(135deg,${T.accent},${T.accentD})`:variant==="danger"?T.red:variant==="green"?T.green:variant==="blue"?T.blue:variant==="ghost"?"transparent":T.light,color:variant==="primary"?"#000":variant==="ghost"?T.muted:(variant==="danger"||variant==="green"||variant==="blue")?T.bg:T.text,border:variant==="ghost"?`1px solid ${T.border}`:"none",opacity:disabled?.5:1,...style}}>{children}</button>
 );
 const Inp=({label,value,onChange,placeholder,type="text",required,error,style={}})=>(
   <div style={{marginBottom:10}}>
@@ -932,11 +934,11 @@ function Disclaimer({onAccept}){
           <div>{EDITEUR.tel} · {EDITEUR.email} · {EDITEUR.site}</div>
           <div style={{marginTop:7,fontSize:12}}>{EDITEUR.droit}</div>
           <div style={{marginTop:7,fontSize:13}}>
-            <a href="https://akili.africavit.com/cgu.html" target="_blank" rel="noopener" style={{color:T.accent}}>Conditions d'utilisation</a>
+            <a href="/cgu.html" target="_blank" rel="noopener" style={{color:T.accent}}>Conditions d'utilisation</a>
             {" · "}
-            <a href="https://akili.africavit.com/cgv.html" target="_blank" rel="noopener" style={{color:T.accent}}>Conditions de vente</a>
+            <a href="/cgv.html" target="_blank" rel="noopener" style={{color:T.accent}}>Conditions de vente</a>
             {" · "}
-            <a href="https://akili.africavit.com/politique-confidentialite.html" target="_blank" rel="noopener" style={{color:T.accent}}>Confidentialité</a>
+            <a href="/politique-confidentialite.html" target="_blank" rel="noopener" style={{color:T.accent}}>Confidentialité</a>
           </div>
         </div>
       </Card>
@@ -1032,7 +1034,7 @@ function AuthScreen(){
           {mode==="register"&&<Inp label="Nom complet" value={name} onChange={setName} placeholder="DIBY Honoré" required error={errors.name}/>}
           {mode==="register"&&<Inp label="Entreprise" value={ent} onChange={setEnt} placeholder="Nom de votre entreprise"/>}
           <Inp label="Email" value={email} onChange={v=>{setEmail(v);setErrors(p=>({...p,email:""}));}} placeholder="vous@imedia.ci" type="email" required error={errors.email}/>
-          {!oubli&&<Inp label="Mot de passe" value={pass} onChange={v=>{setPass(v);setErrors(p=>({...p,pass:""}));}} placeholder="Min. 6 caractères" type="password" required error={errors.pass}/>}
+          {!oubli&&<Inp label="Mot de passe" value={pass} onChange={v=>{setPass(v);setErrors(p=>({...p,pass:""}));}} placeholder="Min. 8 caractères" type="password" required error={errors.pass}/>}
           {mode==="login"&&(
             <div style={{textAlign:"right",marginTop:-6,marginBottom:10}}>
               <span onClick={()=>changer("forgot")} style={{color:T.accent,cursor:"pointer",fontWeight:700,fontSize:15}}>Mot de passe oublié ?</span>
@@ -1085,7 +1087,7 @@ function NouveauMotDePasse(){
         <Card style={{padding:22}}>
           <div style={{fontWeight:800,fontSize:18,marginBottom:8}}>Choisissez un nouveau mot de passe</div>
           <div style={{fontSize:15,color:T.muted,marginBottom:14,lineHeight:1.5}}>Notez-le quelque part de sûr. Vous en aurez besoin à chaque connexion.</div>
-          <Inp label="Nouveau mot de passe" value={p1} onChange={v=>{setP1(v);setErrors(e=>({...e,p1:""}));}} placeholder="Min. 6 caractères" type="password" required error={errors.p1}/>
+          <Inp label="Nouveau mot de passe" value={p1} onChange={v=>{setP1(v);setErrors(e=>({...e,p1:""}));}} placeholder="Min. 8 caractères" type="password" required error={errors.p1}/>
           <Inp label="Confirmer" value={p2} onChange={v=>{setP2(v);setErrors(e=>({...e,p2:""}));}} placeholder="Retapez le même" type="password" required error={errors.p2}/>
           {errors.global&&<div style={{padding:"9px 13px",background:T.red+"15",border:`1px solid ${T.red}33`,borderRadius:7,color:T.red,fontSize:15,marginBottom:10,lineHeight:1.45}}>⚠ {errors.global}</div>}
           <Btn onClick={handle} disabled={load} full style={{padding:16,marginTop:4}}>{load?"⏳...":"✅ Enregistrer et entrer"}</Btn>
@@ -1280,15 +1282,7 @@ function HomeTab({orgId,user,plan,onUpgrade}){
                 </div>
               ))}
             </div>
-            <ResponsiveContainer width="100%" height={80}>
-              <AreaChart data={prevData}>
-                <CartesianGrid strokeDasharray="3 3" stroke={T.border}/>
-                <XAxis dataKey="m" tick={{fill:T.muted,fontSize:13}} axisLine={false} tickLine={false}/>
-                <YAxis tick={{fill:T.muted,fontSize:12}} axisLine={false} tickLine={false} tickFormatter={v=>`${fmtM(v)}F`}/>
-                <Tooltip contentStyle={{background:T.card,border:`1px solid ${T.border}`,borderRadius:8,fontSize:14}} formatter={v=>`${fmtN(v)} FCFA`}/>
-                <Area type="monotone" dataKey="v" stroke={T.accent} fill={T.accentG} strokeWidth={2} name="Trésorerie"/>
-              </AreaChart>
-            </ResponsiveContainer>
+            <Suspense fallback={<div style={{height:80}}/>}><GraphTresorerie prevData={prevData} T={T} fmtM={fmtM} fmtN={fmtN}/></Suspense>
           </>
         )}
       </Card>
@@ -1310,14 +1304,7 @@ function HomeTab({orgId,user,plan,onUpgrade}){
       {typeData.length>0&&(
         <Card style={{marginBottom:10,padding:16}}>
           <div style={{fontSize:15,fontWeight:700,marginBottom:8}}>📄 Documents par type</div>
-          <ResponsiveContainer width="100%" height={80}>
-            <BarChart data={typeData}>
-              <XAxis dataKey="name" tick={{fill:T.muted,fontSize:13}} axisLine={false} tickLine={false}/>
-              <YAxis tick={{fill:T.muted,fontSize:13}} axisLine={false} tickLine={false} allowDecimals={false}/>
-              <Tooltip contentStyle={{background:T.card,border:`1px solid ${T.border}`,borderRadius:8,fontSize:15}} cursor={{fill:T.light}}/>
-              <Bar dataKey="val" name="Nombre" radius={[4,4,0,0]}>{typeData.map((d,i)=><Cell key={i} fill={d.fill}/>)}</Bar>
-            </BarChart>
-          </ResponsiveContainer>
+          <Suspense fallback={<div style={{height:80}}/>}><GraphTypes typeData={typeData} T={T}/></Suspense>
         </Card>
       )}
 

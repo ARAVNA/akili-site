@@ -17,13 +17,13 @@ export default defineConfig({
     rollupOptions: {
       output: {
         // Découpage pensé pour une connexion mobile ivoirienne :
-        // les graphiques (recharts) et Supabase ne sont pas nécessaires
-        // au premier écran, ils se chargent en parallèle et se mettent
-        // en cache séparément — une mise à jour du code applicatif
-        // ne force pas à retélécharger ces deux blocs.
+        // Supabase se met en cache séparément du code applicatif.
+        // recharts n'est PAS listé ici : il est chargé à la demande via
+        // React.lazy (src/Graphiques.jsx). Le lister en « manualChunks »
+        // le rattachait à l'entrée et le faisait précharger (150 Ko gzip)
+        // dès l'écran de connexion.
         manualChunks: {
           react: ["react", "react-dom"],
-          charts: ["recharts"],
           supabase: ["@supabase/supabase-js"],
         },
       },

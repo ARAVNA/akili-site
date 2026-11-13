@@ -6,10 +6,27 @@
     <meta name="theme-color" content="#05080F" />
     <title>AKILI ERP — Gestion · Stocks · RH · OHADA · IA</title>
     <meta name="description" content="ERP pour PME africaines francophones — OHADA, FCFA, Mobile Money" />
+    <!-- L'application (écran de connexion, données privées) n'est pas faite pour
+         être indexée : la vitrine publique est la page d'accueil « / ». -->
+    <meta name="robots" content="noindex, nofollow" />
+    <link rel="canonical" href="https://akilierp.africavit.com/" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   </head>
   <body style="margin:0;background:#05080F">
-    <div id="root"></div>
+    <!-- <main> : repère principal de la page pour les lecteurs d'écran. -->
+    <main id="root"></main>
+    <noscript>
+      <div style="font:16px/1.6 system-ui,sans-serif;color:#EDF3F9;background:#05080F;padding:24px;max-width:640px;margin:0 auto">
+        <h1 style="font-size:22px">AKILI ERP</h1>
+        <p>AKILI est un progiciel de gestion (ERP) pour les PME d'Afrique francophone :
+           facturation, comptabilité conforme OHADA en FCFA, stocks, RH et paie CNPS,
+           CRM, paiements Mobile Money et assistant IA.</p>
+        <p>Cette application a besoin de JavaScript pour fonctionner. Activez-le dans
+           votre navigateur, ou découvrez le produit sur la
+           <a href="/" style="color:#D9A441">page de présentation</a>
+           et dans le <a href="/guide.html" style="color:#D9A441">guide</a>.</p>
+      </div>
+    </noscript>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

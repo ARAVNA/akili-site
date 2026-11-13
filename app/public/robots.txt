@@ -1,0 +1,8 @@
+# AKILI ERP — akilierp.africavit.com
+User-agent: *
+Allow: /
+# L'application (connexion, données des entreprises) n'a pas à être indexée.
+Disallow: /app
+Disallow: /api/
+
+Sitemap: https://akilierp.africavit.com/sitemap.xml
