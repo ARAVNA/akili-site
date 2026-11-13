@@ -34,14 +34,16 @@ create policy "akili_profil_maj" on public.profiles
 
 -- Les droits de colonne sont le vrai verrou : RLS décide QUELLES lignes,
 -- les GRANT décident QUELLES colonnes.
-revoke insert, update, delete on public.profiles from authenticated;
+revoke all on public.profiles from anon;
+revoke truncate, references, trigger, insert, update, delete on public.profiles from authenticated;
 grant select on public.profiles to authenticated;
 grant update (nom, cgu_acceptees_le) on public.profiles to authenticated;
 -- Le profil est créé par le déclencheur creer_profil (security definer) :
 -- aucun besoin que le navigateur puisse insérer.
 
 -- ─── 2. organizations : le plan ne se modifie pas depuis le navigateur ─
-revoke insert, update, delete on public.organizations from authenticated;
+revoke all on public.organizations from anon;
+revoke truncate, references, trigger, insert, update, delete on public.organizations from authenticated;
 grant select on public.organizations to authenticated;
 grant update (nom, rccm, ncc, idu, adresse, tel, email)
   on public.organizations to authenticated;
@@ -56,7 +58,8 @@ begin
     drop policy if exists "akili_quota_lecture" on public.ai_quotas;
     create policy "akili_quota_lecture" on public.ai_quotas
       for select to authenticated using (org_id = public.mon_org());
-    revoke insert, update, delete on public.ai_quotas from authenticated;
+    revoke all on public.ai_quotas from anon;
+    revoke truncate, references, trigger, insert, update, delete on public.ai_quotas from authenticated;
     grant select on public.ai_quotas to authenticated;
   end if;
 end $$;
@@ -82,6 +85,27 @@ revoke all on function public.creer_profil() from public, anon, authenticated;
 revoke all on function public.mon_org() from public, anon;
 grant execute on function public.mon_org() to authenticated;
 
+-- ─── 4 bis. Droits par défaut de Supabase : retirer l'inutile ────────
+-- Supabase accorde TOUS les droits (dont TRUNCATE, qui contourne RLS) à anon
+-- et authenticated sur chaque nouvelle table. Seules les tables d'AKILI sont
+-- traitées ici, nommément : aucune autre table du projet n'est touchée.
+-- (Conséquence : la clé publique « anon » ne peut plus rien lire dans ces
+-- tables ; le keepalive reçoit « permission denied », ce qui réveille quand
+-- même la base.)
+do $$
+declare t text;
+begin
+  foreach t in array array[
+    'organizations','profiles','achats','ai_quotas','clients','comptes_tresorerie',
+    'crm_leads','documents','ecritures','efactures','employes','fournisseurs',
+    'stocks','mouvements_stock','fiches_paie','projets','signatures','taux_change'
+  ] loop
+    if to_regclass('public.'||t) is null then continue; end if;
+    execute format('revoke all on public.%I from anon', t);
+    execute format('revoke truncate, references, trigger on public.%I from authenticated', t);
+  end loop;
+end $$;
+
 -- ─── 5. Journal d'audit ───────────────────────────────────────────
 create table if not exists public.journal_audit (
   id         bigint generated always as identity primary key,
@@ -102,6 +126,7 @@ drop policy if exists "akili_audit_lecture" on public.journal_audit;
 create policy "akili_audit_lecture" on public.journal_audit
   for select to authenticated using (org_id = public.mon_org());
 revoke all on public.journal_audit from authenticated, anon;
+revoke all on sequence public.journal_audit_id_seq from authenticated, anon;
 grant select on public.journal_audit to authenticated;
 
 create or replace function public.journaliser()

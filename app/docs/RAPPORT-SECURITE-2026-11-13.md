@@ -52,7 +52,7 @@ Mesures locales (Chrome headless, serveur émulant `vercel.json`), pas sur le si
 ## 4. Non vérifié — à contrôler
 
 - **Base Supabase en production** : je n'y ai pas accès. Les règles réelles peuvent différer du fichier SQL, et des tables absentes de sa liste peuvent être sans RLS. Après exécution du SQL, la requête de fin de `supabase-securite.sql` doit n'afficher aucune table « RLS ABSENTE ».
-- **Variables Vercel, secrets GitHub, configuration Netlify** : non consultables. Dépôt public : aucune clé trouvée dans les 17 commits (recherche de motifs, pas un scan exhaustif).
+- **Variables Vercel, secrets GitHub, configuration du projet Netlify hérité (keepalive uniquement)** : non consultables. Dépôt public : aucune clé trouvée dans les 17 commits (recherche de motifs, pas un scan exhaustif).
 - **Comportement de `/` sur Vercel** : déduit de l'audit en ligne (0 mot, titre de l'application) et d'une émulation ; à confirmer sur l'aperçu Vercel de la branche.
 - **CSP** en rapport seul : à passer en mode bloquant après vérification de la console sur l'aperçu (la vitrine charge Font Awesome et Google Fonts ; `guide.html` utilise des `onclick` en ligne).
 - **CSRF** : non applicable par conception (jeton `Authorization`, pas de cookie) — raisonnement, non testé. **Injection SQL** : aucune requête brute ; tout passe par supabase-js/PostgREST ; aucune faille trouvée à la lecture.

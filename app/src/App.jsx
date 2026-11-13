@@ -193,6 +193,13 @@ const versBase = (nom, obj, orgId) => {
 
 // Échappe le HTML avant toute mise en forme : un message (saisi ou renvoyé
 // par l'IA) ne doit jamais pouvoir injecter de balise dans la page.
+// Un libellé comme « =HYPERLINK(...) » serait exécuté par Excel à l'ouverture de l'export.
+// On le préfixe d'une apostrophe (texte). À n'appliquer qu'aux colonnes TEXTE : un montant négatif reste un nombre.
+export const neutraliserFormule = v => { const t=String(v==null?"":v); return /^[=+\-@\t\r]/.test(t) ? "'"+t : t; };
+
+// Mise en forme du chat (gras, italique, retours à la ligne) APRÈS échappement du HTML.
+export const formaterMessage = t=>echapperHtml(t).replace(/\*\*(.*?)\*\*/g,"<b>$1</b>").replace(/\*(.*?)\*/g,"<i>$1</i>").replace(/\n/g,"<br/>");
+
 export const echapperHtml = t => String(t ?? "")
   .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
   .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
@@ -614,7 +621,14 @@ function AuthProvider({children}){
 const fmtN  = n=>Number(n||0).toLocaleString("fr-FR");
 const fmtM  = n=>{ const v=Number(n||0); return v>=1e6?`${(v/1e6).toFixed(1)}M`:v>=1e3?`${(v/1e3).toFixed(0)}K`:`${Math.round(v)}`; };
 const today = ()=>new Date().toLocaleDateString("fr-FR");
-const newId = p=>`${p}-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`;
+// Le suffixe était les 4 derniers chiffres de Date.now() : 10 000 valeurs seulement,
+// alors que la clé primaire de documents/achats est commune à TOUS les clients. Deux
+// pièces créées au même moment, ou 100 pièces d'une même entreprise (≈ 40 % de
+// chances de doublon), faisaient échouer l'enregistrement sans message. 40 bits aléatoires.
+export const newId = p=>{
+  const o=new Uint8Array(5); (globalThis.crypto||window.crypto).getRandomValues(o);
+  return `${p}-${new Date().getFullYear()}-${[...o].map(b=>b.toString(16).padStart(2,"0")).join("").toUpperCase()}`;
+};
 const SYSTEM = `Tu es AKILI ERP, expert OHADA, gestion stocks, RH/paie et business pour entrepreneurs africains francophones. FCFA, Mobile Money, PME ivoiriennes. Concis et pratique. Rappelle toujours que tes réponses sont indicatives.`;
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1982,9 +1996,10 @@ function ComptaTab({orgId,user,notify}){
 
   const exporterCSV=()=>{
     const esc=v=>`"${String(v==null?"":v).replace(/"/g,'""')}"`;
+    const escT=v=>esc(neutraliserFormule(v));   // colonnes texte
     const L=[["Date","Piece","Compte","Intitule","Libelle","Debit","Credit"].join(";")];
     [...ecritures].reverse().forEach(e=>L.push(
-      [e.date,e.piece||"",e.compte||"",libelleCompte(e.compte),e.libelle||"",Number(e.debit||0),Number(e.credit||0)].map(esc).join(";")));
+      [escT(e.date),escT(e.piece||""),escT(e.compte||""),escT(libelleCompte(e.compte)),escT(e.libelle||""),esc(Number(e.debit||0)),esc(Number(e.credit||0))].join(";")));
     L.push(["","","","","TOTAUX",bal.totaux.mvtDebit,bal.totaux.mvtCredit].map(esc).join(";"));
     const blob=new Blob(["﻿"+L.join("\r\n")],{type:"text/csv;charset=utf-8;"});
     const url=URL.createObjectURL(blob); const a=document.createElement("a");
@@ -2303,7 +2318,7 @@ function ChatTab({user,plan,notify,onUpgrade}){
     }catch(e){setApiErr(e.message);saveMsgs([...next,{role:"assistant",content:`❌ Erreur : ${e.message}`}]);}
     setLoad(false);
   };
-  const fmt=t=>echapperHtml(t).replace(/\*\*(.*?)\*\*/g,"<b>$1</b>").replace(/\*(.*?)\*/g,"<i>$1</i>").replace(/\n/g,"<br/>");
+  const fmt=formaterMessage;
   const suggestions=["Écriture OHADA pour une vente","TVA 18% Côte d'Ivoire","Calcul CNPS employé","Point mort mon entreprise","Gestion stock saisonnière"];
   return(
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
@@ -2805,7 +2820,7 @@ function SignatureTab({orgId,user,notify}){
               </div>
               <Badge label="Signé" color={T.green}/>
             </div>
-            {s.image && <div style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:8,marginTop:9,padding:6}}>
+            {s.image && /^data:image\/(png|jpeg);base64,/.test(s.image) && <div style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:8,marginTop:9,padding:6}}>
               <img src={s.image} alt="Signature" style={{width:"100%",maxHeight:90,objectFit:"contain",display:"block"}}/>
             </div>}
             <div style={{marginTop:9,paddingTop:9,borderTop:`1px solid ${T.border}`}}>

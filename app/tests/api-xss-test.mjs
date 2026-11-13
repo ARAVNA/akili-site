@@ -75,5 +75,91 @@ await t("API : rôles invalides filtrés (system/tool ignorés)", async()=>{
   assert.deepEqual(m.map(x=>x.role),["user"]);
 });
 await t("API : corps vide → 400", async()=>{ assert.equal((await appeler({body:{}})).code,400); });
+
+// ── 3. XSS : vecteurs supplémentaires, jugés par un VRAI navigateur ──
+const VECTEURS = [
+  '<script>window.__xss=1</script>', '<img src=x onerror="window.__xss=1">', '<svg/onload=window.__xss=1>',
+  '"><img src=x onerror=window.__xss=1>', "'><svg onload=window.__xss=1>", '**<img src=x onerror=window.__xss=1>**',
+  '*<script>window.__xss=1</script>*', '<a href="javascript:window.__xss=1">clic</a>', '<iframe srcdoc="<script>parent.__xss=1</script>">',
+  '<body onload=window.__xss=1>', '<details open ontoggle=window.__xss=1>', '<math><mtext></p><img src=x onerror=window.__xss=1>',
+  '&lt;img src=x onerror=window.__xss=1&gt;', '<style>@import "javascript:window.__xss=1"</style>', '<input autofocus onfocus=window.__xss=1>',
+  '<<script>script>window.__xss=1<</script>/script>', '<img src=x onerror=window.__xss=1 x="**gras**">', '\n<img/src=x/onerror=window.__xss=1>',
+  '<form action="javascript:window.__xss=1"><button>ok</button></form>', '<object data="javascript:window.__xss=1">',
+  '<video><source onerror="window.__xss=1">', '<marquee onstart=window.__xss=1>', '<base href="https://evil.example/">', '<meta http-equiv="refresh" content="0;url=https://evil.example">',
+];
+await t("XSS : formaterMessage garde le gras/italique/retour à la ligne", () => {
+  assert.equal(mod.formaterMessage("**a** *b*\nc"), "<b>a</b> <i>b</i><br/>c");
+});
+await t(`XSS : ${VECTEURS.length} vecteurs — aucune balise « < » ne survit à l'échappement (contrôle textuel)`, () => {
+  for (const v of VECTEURS) { const o = mod.formaterMessage(v).replace(/<\/?(b|i)>|<br\/>/g, ""); assert.ok(!/[<>"']/.test(o), "survivant: " + v + " -> " + o); }
+});
+const chrome = process.env.CHROME_PATH || "/usr/bin/google-chrome";
+let pw = null; try { pw = await import("playwright-core"); } catch {}
+const { existsSync } = await import("node:fs");
+if (pw && existsSync(chrome)) {
+  const br = await pw.chromium.launch({ executablePath: chrome, args: ["--no-sandbox"] }); const pg = await br.newPage();
+  const dialogs = []; pg.on("dialog", (d) => { dialogs.push(d.message()); d.dismiss(); });
+  await pg.setContent("<div id=z></div>");
+  await t(`XSS (Chrome) : ${VECTEURS.length} vecteurs injectés via innerHTML — 0 exécution, 0 élément hors <b>/<i>/<br>, 0 attribut`, async () => {
+    for (const v of VECTEURS) {
+      const html = mod.formaterMessage(v);
+      const r = await pg.evaluate((h) => { const z = document.getElementById("z"); z.innerHTML = h;
+        const bad = [...z.querySelectorAll("*")].filter((e) => !["B", "I", "BR"].includes(e.tagName) || e.attributes.length);
+        return { bad: bad.map((e) => e.outerHTML), x: window.__xss }; }, html);
+      await pg.waitForTimeout(30);
+      assert.equal(r.x, undefined, "exécuté: " + v); assert.deepEqual(r.bad, [], "balise injectée: " + v);
+    }
+    assert.deepEqual(dialogs, []);
+  });
+  await br.close();
+} else res.push(["⚠️", "XSS (Chrome) ignoré : navigateur ou playwright-core indisponible"]);
+
+// ── 4. Identifiants et export CSV ──
+await t("identifiants : newId → format PRÉFIXE-ANNÉE-10 hexa, 100 000 sans doublon", () => {
+  const s = new Set(); for (let i = 0; i < 100000; i++) s.add(mod.newId("FAC"));
+  assert.equal(s.size, 100000); assert.match(mod.newId("FAC"), /^FAC-\d{4}-[0-9A-F]{10}$/);
+});
+await t("CSV : =, +, -, @, tabulation en tête de texte sont neutralisés", () => {
+  for (const v of ['=HYPERLINK("http://evil","x")', "+1+1", "-2+3", "@SUM(A1)", "\tcmd", "\r=1"]) assert.ok(mod.neutraliserFormule(v).startsWith("'"), v);
+  for (const v of ["Facture 12", "Client =x", "706", "", null]) assert.equal(mod.neutraliserFormule(v), String(v ?? ""));
+});
+
+// ── 5. API IA : limites et fuites ──
+await t("API : le corps ne peut pas imposer modèle, max_tokens, entreprise ou clé", async () => {
+  const r = await appeler({ body: { messages: [{ role: "user", content: "x" }], model: "gros-modele", max_tokens: 999999, org_id: "99999999-9999-4999-8999-999999999999", api_key: "pirate" } });
+  const a = r.appels.find((x) => x.url.includes("anthropic")); const b = JSON.parse(a.opt.body);
+  assert.equal(b.max_tokens, 1200); assert.notEqual(b.model, "gros-modele"); assert.ok(!a.opt.headers["x-api-key"].includes("pirate"));
+  assert.ok(!r.appels.some((x) => x.url.includes("99999999-9999")), "org_id du client utilisé !");
+});
+await t("API : 20 derniers messages, 24 000 caractères max chacun, contenus non texte ignorés", async () => {
+  const msgs = Array.from({ length: 50 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", content: i === 49 ? "x".repeat(50000) : "m" + i }));
+  msgs.push({ role: "user", content: { evil: true } }, { role: "user", content: ["a"] });
+  const r = await appeler({ body: { messages: msgs } }); const b = JSON.parse(r.appels.find((x) => x.url.includes("anthropic")).opt.body);
+  assert.ok(b.messages.length <= 20); assert.ok(b.messages.every((m) => typeof m.content === "string" && m.content.length <= 24000));
+});
+await t("API : system tronqué à 8 000 caractères, ignoré s'il n'est pas du texte", async () => {
+  let r = await appeler({ body: { system: "s".repeat(20000), messages: [{ role: "user", content: "x" }] } });
+  assert.equal(JSON.parse(r.appels.find((x) => x.url.includes("anthropic")).opt.body).system.length, 8000);
+  r = await appeler({ body: { system: { evil: 1 }, messages: [{ role: "user", content: "x" }] } });
+  assert.equal(JSON.parse(r.appels.find((x) => x.url.includes("anthropic")).opt.body).system, undefined);
+});
+await t("API : une erreur Anthropic ne divulgue ni message brut ni clé", async () => {
+  Object.assign(process.env, ENV); const base = globalThis.fetch;
+  const r = await (async () => { const o = await appeler({}); return o; })(); // initialise le harnais
+  globalThis.fetch = async (url, opt) => String(url).includes("anthropic") ? ({ ok: false, status: 500, json: async () => ({ error: { message: "secret interne test-key-factice sk-ant-FAUX" } }) }) : base(url, opt);
+  const h = (await import(root + "api/ia.js?v=" + Math.random())).default; let code, out; await h({ method: "POST", headers: { authorization: "Bearer j" }, body: { messages: [{ role: "user", content: "x" }] } }, { setHeader() {}, status: (c) => ({ json: (o) => { code = c; out = o; } }) });
+  assert.equal(code, 502); assert.ok(!JSON.stringify(out).includes("secret interne") && !JSON.stringify(out).includes("sk-ant") && !JSON.stringify(out).includes("test-key-factice"));
+});
+await t("API : aucune en-tête CORS ouverte (pas d'Access-Control-Allow-Origin: *)", async () => {
+  const r = await appeler({}); assert.ok(!Object.keys(r.hdrs).some((k) => /access-control/i.test(k)));
+});
+await t("API : jeton refusé par Supabase → aucune lecture de profil ni appel IA", async () => {
+  const r = await appeler({ sb: { user: { ok: false, status: 401, json: async () => ({}) } } });
+  assert.ok(!r.appels.some((x) => /profiles|anthropic|ai_quotas/.test(x.url)));
+});
+await t("API : identifiant utilisateur non conforme (injection dans l'URL REST) → 401", async () => {
+  const r = await appeler({ sb: { user: { ok: true, status: 200, json: async () => ({ id: "x&select=*&org_id=neq.0" }) } } });
+  assert.equal(r.code, 401); assert.ok(!r.appels.some((x) => /profiles/.test(x.url)));
+});
 await srv.close();
 console.log(res.map(r=>r.join(" ")).join("\n")); const ko=res.filter(r=>r[0]==="❌").length; console.log(`\n${res.length-ko}/${res.length} tests conformes`); process.exit(ko?1:0);

@@ -1,4 +1,6 @@
-# akili.africavit.com — Netlify
+# akili.africavit.com — ancien projet Netlify (conservé uniquement pour le keepalive)
+#
+# AKILI ERP est hébergé sur VERCEL (akilierp.africavit.com).
 #
 # Ce site ne publie plus de pages : le site vitrine et l'application
 # vivent désormais ensemble sur akilierp.africavit.com (vitrine à
@@ -6,7 +8,7 @@
 # finissait par les faire diverger — un tarif corrigé d'un côté et pas
 # de l'autre.
 #
-# Le projet Netlify reste nécessaire pour une raison précise : la tâche
+# Ce projet Netlify hérité n'héberge plus AKILI ; il reste pour une seule raison : la tâche
 # planifiée netlify/functions/supabase-keepalive.mjs interroge la base
 # chaque jour, faute de quoi Supabase met le projet gratuit en pause au
 # bout de sept jours d'inactivité.

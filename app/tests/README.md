@@ -13,3 +13,17 @@ node tests/rls-test.mjs apres .        # attendu : 21/21 conformes
 # XSS du chat + route /api/ia (services simulés, aucune clé réelle).
 node tests/api-xss-test.mjs            # attendu : 12/12 conformes
 ```
+
+## Tests ajoutés (validation avant fusion)
+
+Installation (sans modifier package.json) :
+`npm i --no-save @electric-sql/pglite @electric-sql/pglite-tools playwright-core`
+
+- `node tests/rls-matrix.mjs apres` — matrice 2 entreprises × 4 utilisateurs + anonyme (`avant` = ancien schéma)
+- `node tests/privileges.mjs apres` — fonctions SECURITY DEFINER, droits, RLS
+- `node tests/replay.mjs` — rejouabilité des SQL, aucune perte de données
+- `node tests/documents-db-test.mjs` — isolation des documents, collisions d'id
+- `node tests/api-xss-test.mjs` — XSS (Chrome), API IA, CSV
+- `node tests/restore-drill.mjs` — sauvegarde/restauration simulée (pg_dump)
+
+Ces tests simulent Supabase ; ils ne remplacent pas une vérification sur le vrai projet.

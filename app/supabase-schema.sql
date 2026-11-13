@@ -271,6 +271,10 @@ begin
     'projets','signatures','taux_change'
   ] loop
     if to_regclass('public.'||t) is null then continue; end if;
+    -- Supabase accorde par défaut TOUS les droits (dont TRUNCATE, qui ignore
+    -- RLS) à anon et authenticated. On retire ce qui n'est pas nécessaire.
+    execute format('revoke all on public.%I from anon', t);
+    execute format('revoke truncate, references, trigger on public.%I from authenticated', t);
     execute format('grant select, insert, update, delete on public.%I to authenticated', t);
   end loop;
 end $$;
@@ -293,7 +297,8 @@ create policy "akili_profil_lecture" on public.profiles
 create policy "akili_profil_maj" on public.profiles
   for update to authenticated
   using (id = auth.uid()) with check (id = auth.uid());
-revoke insert, update, delete on public.profiles from authenticated;
+revoke all on public.profiles from anon;
+revoke truncate, references, trigger, insert, update, delete on public.profiles from authenticated;
 grant select on public.profiles to authenticated;
 grant update (nom, cgu_acceptees_le) on public.profiles to authenticated;
 
@@ -308,7 +313,8 @@ create policy "akili_org_maj" on public.organizations
   using (id = public.mon_org()) with check (id = public.mon_org());
 -- SÉCURITÉ : « plan » ne se change pas depuis le navigateur (sinon : offre
 -- enterprise gratuite). Seules les coordonnées de l'entreprise sont modifiables.
-revoke insert, update, delete on public.organizations from authenticated;
+revoke all on public.organizations from anon;
+revoke truncate, references, trigger, insert, update, delete on public.organizations from authenticated;
 grant select on public.organizations to authenticated;
 grant update (nom, rccm, ncc, idu, adresse, tel, email) on public.organizations to authenticated;
 
@@ -322,7 +328,8 @@ begin
     drop policy if exists "akili_quota_lecture" on public.ai_quotas;
     create policy "akili_quota_lecture" on public.ai_quotas
       for select to authenticated using (org_id = public.mon_org());
-    revoke insert, update, delete on public.ai_quotas from authenticated;
+    revoke all on public.ai_quotas from anon;
+    revoke truncate, references, trigger, insert, update, delete on public.ai_quotas from authenticated;
     grant select on public.ai_quotas to authenticated;
   end if;
 end $$;

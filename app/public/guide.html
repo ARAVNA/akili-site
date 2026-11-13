@@ -153,8 +153,8 @@
       <i class="fa-solid fa-brain"></i> AKILI ERP
     </a>
     <div class="nav-right">
-      <button class="lang-btn active" id="btnFr" onclick="setLang('fr')">🇫🇷 FR</button>
-      <button class="lang-btn" id="btnEn" onclick="setLang('en')">🇬🇧 EN</button>
+      <button class="lang-btn active" id="btnFr">🇫🇷 FR</button>
+      <button class="lang-btn" id="btnEn">🇬🇧 EN</button>
       <a href="/app" class="btn-try">
         <i class="fa-solid fa-rocket"></i> Essayer / Try Akili ERP
       </a>
@@ -549,6 +549,10 @@
       if (val) el.textContent = val;
     });
   }
+
+  // Boutons de langue : écouteurs ici plutôt que « onclick » en ligne (interdit par la CSP).
+  document.getElementById('btnFr').addEventListener('click', () => setLang('fr'));
+  document.getElementById('btnEn').addEventListener('click', () => setLang('en'));
 
   // REVEAL
   const observer = new IntersectionObserver(entries => {
