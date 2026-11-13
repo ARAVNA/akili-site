@@ -33,6 +33,11 @@ const MODEL   = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514";
 const PHASE_TEST_FIN = new Date("2026-11-21T23:59:59Z");
 const enPhaseTest = () => new Date() <= PHASE_TEST_FIN;
 
+// Instructions de l'assistant : elles vivent sur le serveur. Le navigateur
+// ne peut ni les lire dans le code de la page ni les remplacer : tout champ
+// « system » envoyé par un client est ignoré.
+const SYSTEM = "Tu es AKILI ERP, expert OHADA, gestion stocks, RH/paie et business pour entrepreneurs africains francophones. FCFA, Mobile Money, PME ivoiriennes. Concis et pratique. Rappelle toujours que tes réponses sont indicatives.";
+
 const QUOTAS = { starter: 30, business: 150, enterprise: 999 };
 
 // Plafond de sécurité pendant la phase de test : « gratuit » ne doit pas
@@ -96,8 +101,13 @@ export default async function handler(req, res) {
     orgId = Array.isArray(profils) ? profils[0]?.org_id : null;
     if (!orgId) return json(res, 403, { error: "Aucune entreprise rattachée à ce compte." });
 
-    const orgs = await sbGet(`organizations?id=eq.${orgId}&select=plan`);
-    if (Array.isArray(orgs) && orgs[0]?.plan) plan = orgs[0].plan;
+    const orgs = await sbGet(`organizations?id=eq.${orgId}&select=plan,plan_expire_le`);
+    if (Array.isArray(orgs) && orgs[0]?.plan) {
+      plan = orgs[0].plan;
+      // Offre payante expirée → retour à Starter (une date vide = activation manuelle sans échéance).
+      const exp = orgs[0].plan_expire_le ? new Date(orgs[0].plan_expire_le) : null;
+      if (exp && exp < new Date()) plan = "starter";
+    }
 
     const q = await sbGet(`ai_quotas?org_id=eq.${orgId}&month=eq.${mois}&select=count`);
     if (Array.isArray(q) && q[0]?.count) utilises = Number(q[0].count) || 0;
@@ -115,7 +125,7 @@ export default async function handler(req, res) {
   }
 
   // ── 3. La demande ──
-  const { system, messages } = req.body || {};
+  const { messages } = req.body || {};   // tout « system » du client est ignoré (voir SYSTEM)
   if (!Array.isArray(messages) || !messages.length)
     return json(res, 400, { error: "Aucune question transmise." });
 
@@ -138,7 +148,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         model: MODEL,
         max_tokens: MAX_TOKENS,
-        ...(typeof system === "string" && system ? { system: system.slice(0, 8000) } : {}),
+        system: SYSTEM,
         messages: propres,
       }),
     });

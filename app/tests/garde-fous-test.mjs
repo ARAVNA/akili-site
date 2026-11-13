@@ -1,0 +1,25 @@
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { bilan } from "./lib/sim.mjs";
+const R = []; const t = (n, ok, d = "") => R.push({ nom: n, ok, detail: d });
+const lancer = (phase, env, dist) => spawnSync("node", ["scripts/garde-fous.mjs", phase], { env: { PATH: process.env.PATH, ...env, ...(dist ? { GARDE_DIST: dist } : {}) }, encoding: "utf8" });
+const jwt = (role) => { const b = (o) => Buffer.from(JSON.stringify(o)).toString("base64url"); return `${b({ alg: "HS256" })}.${b({ iss: "supabase", role })}.${"s".repeat(20)}`; };
+const dist = (contenu) => { const d = mkdtempSync(join(tmpdir(), "dist-")); mkdirSync(join(d, "assets")); writeFileSync(join(d, "assets/a.js"), contenu); return d; };
+
+let r = lancer("avant", { VITE_SUPABASE_URL: "https://x", VITE_SUPABASE_ANON_KEY: "a" }); t("avant : configuration normale acceptée", r.status === 0);
+r = lancer("avant", { VITE_SERVICE_ROLE_KEY: "x" }); t("avant : VITE_SERVICE_ROLE_KEY refusée", r.status === 1 && /VITE_SERVICE_ROLE_KEY/.test(r.stderr));
+r = lancer("avant", { NEXT_PUBLIC_ANTHROPIC_API_KEY: "x" }); t("avant : NEXT_PUBLIC_ANTHROPIC_API_KEY refusée", r.status === 1);
+r = lancer("avant", { VITE_PAIEMENT_SECRET_FAUX: "x" }); t("avant : secret de paiement exposé refusé", r.status === 1);
+r = lancer("avant", { VERCEL_ENV: "production" }); t("avant : production sans Supabase → échec (pas de mode démo en production)", r.status === 1 && /mode démo/.test(r.stderr));
+r = lancer("avant", { VERCEL_ENV: "production", NEXT_PUBLIC_SUPABASE_URL: "https://x", NEXT_PUBLIC_SUPABASE_ANON_KEY: "a" }); t("avant : production avec les variables NEXT_PUBLIC_ acceptée", r.status === 0);
+r = lancer("avant", { VERCEL_ENV: "preview" }); t("avant : prévisualisation sans Supabase tolérée (démo)", r.status === 0);
+r = lancer("apres", {}, dist(`const k="${jwt("anon")}"`)); t("après : clé publique « anon » dans le bundle acceptée", r.status === 0);
+r = lancer("apres", {}, dist(`const k="${jwt("service_role")}"`)); t("après : jeton service_role dans le bundle → échec", r.status === 1 && /service_role/.test(r.stderr));
+const SECRET = "valeur-secrete-factice-123";
+r = lancer("apres", { SUPABASE_SERVICE_ROLE_KEY: SECRET }, dist(`x="${SECRET}"`)); t("après : valeur de SUPABASE_SERVICE_ROLE_KEY dans le bundle → échec, sans l'afficher", r.status === 1 && !r.stderr.includes(SECRET) && /SUPABASE_SERVICE_ROLE_KEY/.test(r.stderr));
+r = lancer("apres", {}, dist(`x="sk-ant-${"a".repeat(30)}"`)); t("après : clé de type Anthropic → échec", r.status === 1);
+r = lancer("apres", {}, dist(`ok`)); t("après : bundle propre accepté", r.status === 0);
+const d = dist("ok"); writeFileSync(join(d, "assets/a.js.map"), "{}"); r = lancer("apres", {}, d); t("après : source map publiée → échec", r.status === 1);
+process.exit(bilan("GARDE-FOUS DE CONSTRUCTION", R) ? 1 : 0);

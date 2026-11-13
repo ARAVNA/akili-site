@@ -105,7 +105,7 @@ export const lireSql = (f, mode = "apres") => mode === "avant"
   ? execSync(`git show avant-corrections-2026-11-13:app/${f}`, { cwd: RACINE, stdio: ["ignore", "pipe", "ignore"] }).toString()
   : readFileSync(RACINE + f, "utf8");
 export const scriptsSql = (mode) => mode === "avant" ? [lireSql("supabase-schema.sql", "avant")]
-  : [lireSql("supabase-schema.sql"), lireSql("supabase-securite.sql")];
+  : [lireSql("supabase-schema.sql"), lireSql("supabase-securite.sql"), lireSql("supabase-paiements.sql")];
 export const bilan = (titre, resultats) => {
   console.log(`\n=== ${titre} ===`);
   for (const r of resultats) console.log(`${r.ok ? "✅" : "❌"} ${r.nom}${r.detail ? " — " + r.detail : ""}`);

@@ -65,9 +65,9 @@ try { await r3.exec(sqlDonnees); } catch (e) { err3 ||= e.message.split("\n")[0]
 await r3.exec(`set session_replication_role = origin; reset row_security; reset search_path;`);
 const p3 = await privs(r3);
 t("CONSTAT : un dump sans privilèges (--no-privileges) restaure les politiques mais PAS les REVOKE → droits par défaut de Supabase rétablis (TRUNCATE, anon)", p3 !== sourcePrivs && /anon:truncate|authenticated:truncate/.test(p3 || ""), err3 || "écart de privilèges constaté");
-await r3.exec(scripts[1]);                          // supabase-securite.sql
+await r3.exec(scripts[1]); await r3.exec(scripts[2]);                          // supabase-securite.sql
 if(process.env.DBG){const a=(sourcePrivs).split(","),b=(await privs(r3)).split(",");console.log("DBG3 diff",a.filter(x=>!b.includes(x)).slice(0,6),b.filter(x=>!a.includes(x)).slice(0,6));}
-t("…et le rejeu de supabase-securite.sql après restauration referme ces droits", (await privs(r3)) === sourcePrivs, "");
+t("…et le rejeu de supabase-securite.sql + supabase-paiements.sql après restauration referme ces droits", (await privs(r3)) === sourcePrivs, "");
 t("restauration n°3 : données identiques après rejeu de la sécurité", JSON.stringify(await etat(r3)) === JSON.stringify(sourceEtat) || true, "");
 
 // ── RESTAURATION n°4 : ordre recommandé (comptes → dump complet public → rejeu des scripts) ──

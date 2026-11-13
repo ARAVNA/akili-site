@@ -57,7 +57,13 @@ const rls = await q(`select c.relname, c.relrowsecurity as rls from pg_class c j
 t(`RLS activé sur les ${rls.length} tables du schéma public`, rls.every((r) => r.rls), rls.filter((r) => !r.rls).map((r) => r.relname).join(",") || "toutes");
 const pol = await q(`select tablename, policyname, cmd, roles::text, qual, with_check from pg_policies where schemaname='public' order by 1,2`);
 console.log("\nPolitiques RLS :\n" + pol.map((p) => `  ${p.tablename.padEnd(20)} ${p.policyname.padEnd(22)} ${p.cmd.padEnd(7)} ${p.roles}  USING(${p.qual ?? ""}) CHECK(${p.with_check ?? ""})`).join("\n"));
-const sansPolitique = rls.filter((r) => r.rls && !pol.some((p) => p.tablename === r.relname)).map((r) => r.relname);
+// Tables VOLONTAIREMENT verrouillées pour le navigateur (accès service_role uniquement) : paiements.
+const SERVEUR_SEUL = ["commandes_paiement", "evenements_paiement"];
+const sansPolitique = rls.filter((r) => r.rls && !pol.some((p) => p.tablename === r.relname) && !SERVEUR_SEUL.includes(r.relname)).map((r) => r.relname);
+if (mode !== "avant") for (const tb of SERVEUR_SEUL) {
+  const a = (await db.query(`select has_table_privilege('authenticated','public.${tb}','select') s, has_table_privilege('anon','public.${tb}','select') a, has_table_privilege('service_role','public.${tb}','select') v`)).rows[0];
+  t(`${tb} : verrouillée au navigateur (anon/authenticated sans droit), accessible au serveur`, !a.s && !a.a && a.v);
+}
 t("aucune table avec RLS activé mais sans politique (= verrouillée pour tous)", mode === "avant" || sansPolitique.length === 0, sansPolitique.join(","));
 t("aucune politique ouverte à `public`/anon ni `USING (true)`", !pol.some((p) => /anon|public/.test(p.roles.replace("{authenticated}", "")) || p.qual === "true" || p.with_check === "true"), "");
 t("toutes les politiques d'entreprise reposent sur mon_org()", pol.filter((p) => !["profiles"].includes(p.tablename)).every((p) => /mon_org/.test((p.qual || "") + (p.with_check || ""))), "");

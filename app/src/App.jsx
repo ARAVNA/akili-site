@@ -208,7 +208,7 @@ export const echapperHtml = t => String(t ?? "")
 // Passe par /api/ia, jamais directement par api.anthropic.com :
 // la clé reste sur le serveur, et le quota y est décompté hors de
 // portée du navigateur.
-async function appelIA({system,messages}){
+async function appelIA({messages}){
   const c=sb();
   if(!c) throw new Error("L'assistant IA nécessite un compte. En mode démo, il est indisponible.");
   let jeton=null;
@@ -218,7 +218,7 @@ async function appelIA({system,messages}){
   try{
     r=await fetch("/api/ia",{method:"POST",
       headers:{"content-type":"application/json",Authorization:`Bearer ${jeton}`},
-      body:JSON.stringify({system,messages})});
+      body:JSON.stringify({messages})});
     d=await r.json().catch(()=>({}));
   }catch{ throw new Error("Assistant injoignable. Vérifiez votre connexion."); }
   if(!r.ok) throw new Error(d?.error||"L'assistant n'a pas pu répondre.");
@@ -480,11 +480,15 @@ function AuthProvider({children}){
       const {data}=await sb().from("profiles").select("*").eq("id",u.id).maybeSingle();
       if(data){
         base.name       = data.name||data.full_name||base.name;
-        base.entreprise = data.entreprise||data.company||base.entreprise;
-        base.orgId      = data.organization_id||data.org_id||u.id;
-        base.plan       = data.plan||"starter";
-      }else{
-        await sb().from("profiles").insert({ id:u.id, email:u.email, name:base.name }).then(()=>{},()=>{});
+        base.orgId      = data.org_id||u.id;
+        // L'offre vient de l'ENTREPRISE (organizations.plan), jamais du profil ni du navigateur.
+        // Le plan est en lecture seule ici : seul un paiement confirmé côté serveur le change.
+        const {data:org}=await sb().from("organizations").select("nom,plan,plan_expire_le").eq("id",base.orgId).maybeSingle();
+        if(org){
+          base.entreprise = org.nom||base.entreprise;
+          const expire = org.plan_expire_le ? new Date(org.plan_expire_le) : null;
+          base.plan = (PLANS[org.plan] && !(expire && expire < new Date())) ? org.plan : "starter";
+        }
       }
     }catch{}
     return base;
@@ -604,16 +608,24 @@ function AuthProvider({children}){
     else saveLocal(null);
   };
 
+  // Changer d'offre = créer une COMMANDE côté serveur ; le plan, lui, ne change qu'après un paiement
+  // confirmé par signature (api/paiement-webhook). Rien n'est écrit depuis le navigateur.
   const upgradePlan=async p=>{
-    const u={...user,plan:p}; setUser(u);
-    if(SB_OK){ try{ await sb().from("profiles").update({plan:p}).eq("id",user.uid); }catch{} }
-    else{
+    if(!SB_OK){   // mode démo local uniquement
+      const u={...user,plan:p}; setUser(u);
       sessionStorage.setItem("akili_s",JSON.stringify(u));
       const us=Store._localGet("akili_users",{});
       if(us[user.email]){ us[user.email].plan=p; Store._localSet("akili_users",us); }
+      return null;
     }
+    const {data}=await sb().auth.getSession();
+    const jeton=data?.session?.access_token;
+    if(!jeton) throw new Error("Session expirée. Reconnectez-vous.");
+    const r=await fetch("/api/paiement-commande",{method:"POST",headers:{"content-type":"application/json",Authorization:`Bearer ${jeton}`},body:JSON.stringify({plan:p})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(d?.error||"Commande impossible.");
+    return d;
   };
-
   return <AuthCtx.Provider value={{user,boot,mode,recup,register,login,logout,upgradePlan,resetPassword,definirMotDePasse}}>{children}</AuthCtx.Provider>;
 }
 
@@ -629,7 +641,6 @@ export const newId = p=>{
   const o=new Uint8Array(5); (globalThis.crypto||window.crypto).getRandomValues(o);
   return `${p}-${new Date().getFullYear()}-${[...o].map(b=>b.toString(16).padStart(2,"0")).join("").toUpperCase()}`;
 };
-const SYSTEM = `Tu es AKILI ERP, expert OHADA, gestion stocks, RH/paie et business pour entrepreneurs africains francophones. FCFA, Mobile Money, PME ivoiriennes. Concis et pratique. Rappelle toujours que tes réponses sont indicatives.`;
 
 // ═══════════════════════════════════════════════════════════════════
 // MOTEUR COMPTABLE OHADA (SYSCOHADA révisé)
@@ -1832,7 +1843,7 @@ function DocsTab({orgId,user,plan,notify,onUpgrade}){
     const num=newId(docType.toUpperCase().slice(0,3));
     const prompt=`Génère un ${docType} professionnel N°${num} daté du ${today()} :\nClient: ${form.client} | Service: ${form.service} | Montant: ${fmtN(form.montant)} ${form.devise}\nPrestataire: ${user.entreprise||"Mon entreprise"}\nConditions: 50% signature, 50% livraison${form.details?" | "+form.details:""}\nNote bas de page: "Document généré par AKILI ERP — ${EDITEUR.nom} (RCCM ${EDITEUR.rccm}) à titre indicatif — à valider par un professionnel qualifié."`;
     try{
-      const d=await appelIA({system:SYSTEM,messages:[{role:"user",content:prompt}]});
+      const d=await appelIA({messages:[{role:"user",content:prompt}]});
       const txt=d.texte;
       const doc={id:num,type:docType,client:form.client,montant:form.montant,devise:form.devise,date:today(),content:txt,owner:user.uid};
       setGen(txt);save([doc,...docs]);
@@ -2312,7 +2323,7 @@ function ChatTab({user,plan,notify,onUpgrade}){
     if(!QM.can(user.uid,plan)){notify("🚫 Quota IA épuisé",T.red);onUpgrade();return;}
     const next=[...msgs,{role:"user",content:input}];saveMsgs(next);setInput("");setLoad(true);setApiErr("");QM.inc(user.uid);
     try{
-      const d=await appelIA({system:SYSTEM,messages:next.slice(-20).map(m=>({role:m.role,content:m.content}))});
+      const d=await appelIA({messages:next.slice(-20).map(m=>({role:m.role,content:m.content}))});
       const txt=d.texte;
       saveMsgs([...next,{role:"assistant",content:txt}]);
     }catch(e){setApiErr(e.message);saveMsgs([...next,{role:"assistant",content:`❌ Erreur : ${e.message}`}]);}
