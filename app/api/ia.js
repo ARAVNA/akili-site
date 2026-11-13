@@ -20,7 +20,10 @@
 //   ANTHROPIC_MODEL             facultatif
 // ═══════════════════════════════════════════════════════════════════
 
-const SB_URL  = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+// Le projet Vercel porte les variables sous deux noms (voir vite.config.js) :
+// on accepte les deux, sinon la route échouerait en « URL absente ».
+const SB_URL  = process.env.VITE_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+const SB_ANON = process.env.VITE_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const SB_SVC  = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const AI_KEY  = process.env.ANTHROPIC_API_KEY;
 const MODEL   = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514";
@@ -32,19 +35,31 @@ const enPhaseTest = () => new Date() <= PHASE_TEST_FIN;
 
 const QUOTAS = { starter: 30, business: 150, enterprise: 999 };
 
+// Plafond de sécurité pendant la phase de test : « gratuit » ne doit pas
+// vouloir dire « sans limite » si un compte est détourné ou un script
+// s'emballe. Très au-dessus d'un usage normal.
+const PLAFOND_TEST = 500;
+
 // Garde-fous indépendants du quota mensuel : ils limitent ce qu'une
 // seule requête peut coûter, même pendant la phase gratuite.
 const MAX_TOKENS   = 1200;
 const MAX_MESSAGES = 20;
 const MAX_CARACT   = 24000;
 
-const json = (res, code, corps) => res.status(code).json(corps);
+const json = (res, code, corps) => {
+  res.setHeader("Cache-Control", "no-store");
+  return res.status(code).json(corps);
+};
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return json(res, 405, { error: "Méthode non autorisée." });
 
   if (!AI_KEY)  return json(res, 500, { error: "Service IA non configuré (clé Anthropic absente côté serveur)." });
   if (!SB_URL)  return json(res, 500, { error: "Service IA non configuré (URL Supabase absente)." });
+  // Échec fermé : sans la clé serveur, on ne peut ni vérifier l'entreprise
+  // ni décompter le quota. Laisser passer reviendrait à offrir l'IA sans
+  // contrôle à n'importe quel compte.
+  if (!SB_SVC)  return json(res, 500, { error: "Service IA non configuré (clé serveur Supabase absente)." });
 
   // ── 1. Qui appelle ? ──
   const jeton = (req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
@@ -53,7 +68,7 @@ export default async function handler(req, res) {
   let utilisateur;
   try {
     const r = await fetch(`${SB_URL}/auth/v1/user`, {
-      headers: { Authorization: `Bearer ${jeton}`, apikey: SB_SVC || jeton },
+      headers: { Authorization: `Bearer ${jeton}`, apikey: SB_ANON || SB_SVC },
     });
     if (!r.ok) return json(res, 401, { error: "Session expirée. Reconnectez-vous." });
     utilisateur = await r.json();
@@ -61,7 +76,7 @@ export default async function handler(req, res) {
     return json(res, 503, { error: "Vérification de session impossible. Réessayez." });
   }
   const uid = utilisateur?.id;
-  if (!uid) return json(res, 401, { error: "Session invalide." });
+  if (!uid || !/^[0-9a-f-]{36}$/i.test(uid)) return json(res, 401, { error: "Session invalide." });
 
   // ── 2. Quelle entreprise, quelle offre, quel quota restant ? ──
   // Le quota se compte par ENTREPRISE et non par personne : c'est
@@ -89,6 +104,9 @@ export default async function handler(req, res) {
   }
 
   const plafond = QUOTAS[plan] || QUOTAS.starter;
+  if (enPhaseTest() && utilises >= PLAFOND_TEST) {
+    return json(res, 429, { error: "Limite de la phase de test atteinte pour ce mois. Contactez le support." });
+  }
   if (!enPhaseTest() && utilises >= plafond) {
     return json(res, 429, {
       error: `Quota IA épuisé pour ce mois (${plafond} requêtes incluses dans l'offre ${plan}, partagées par toute l'entreprise).`,
@@ -145,7 +163,20 @@ export default async function handler(req, res) {
   // ── 5. Décompte du quota, après succès seulement ──
   // Échouer ici ne doit pas priver l'utilisateur de sa réponse : elle est
   // déjà payée. On journalise et on continue.
-  if (SB_SVC) {
+  let compte = false;
+  try {
+    // Incrément atomique côté base (supabase-securite.sql) : deux requêtes
+    // simultanées ne s'écrasent plus.
+    const r = await fetch(`${SB_URL}/rest/v1/rpc/incrementer_quota_ia`, {
+      method: "POST",
+      headers: { apikey: SB_SVC, Authorization: `Bearer ${SB_SVC}`, "content-type": "application/json" },
+      body: JSON.stringify({ p_org: orgId, p_month: mois }),
+    });
+    compte = r.ok;
+  } catch (e) { console.error("quota rpc", e?.message); }
+
+  // Repli, tant que la migration SQL n'a pas été exécutée.
+  if (!compte) {
     try {
       await fetch(`${SB_URL}/rest/v1/ai_quotas?on_conflict=org_id,month`, {
         method: "POST",

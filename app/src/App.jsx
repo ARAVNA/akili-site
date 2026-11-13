@@ -189,6 +189,34 @@ const versBase = (nom, obj, orgId) => {
   return o;
 };
 
+// Échappe le HTML avant toute mise en forme : un message (saisi ou renvoyé
+// par l'IA) ne doit jamais pouvoir injecter de balise dans la page.
+export const echapperHtml = t => String(t ?? "")
+  .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+  .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+
+// ─── APPEL À L'IA ─────────────────────────────────────────────────
+// Passe par /api/ia, jamais directement par api.anthropic.com :
+// la clé reste sur le serveur, et le quota y est décompté hors de
+// portée du navigateur.
+async function appelIA({system,messages}){
+  const c=sb();
+  if(!c) throw new Error("L'assistant IA nécessite un compte. En mode démo, il est indisponible.");
+  let jeton=null;
+  try{ const {data}=await c.auth.getSession(); jeton=data?.session?.access_token; }catch{}
+  if(!jeton) throw new Error("Session expirée. Reconnectez-vous.");
+  let r,d;
+  try{
+    r=await fetch("/api/ia",{method:"POST",
+      headers:{"content-type":"application/json",Authorization:`Bearer ${jeton}`},
+      body:JSON.stringify({system,messages})});
+    d=await r.json().catch(()=>({}));
+  }catch{ throw new Error("Assistant injoignable. Vérifiez votre connexion."); }
+  if(!r.ok) throw new Error(d?.error||"L'assistant n'a pas pu répondre.");
+  if(!d?.texte) throw new Error("Réponse vide de l'assistant.");
+  return d;
+}
+
 // ─── Store ────────────────────────────────────────────────────────
 export const Store = {
   _c:new Map(), _subs:new Set(), _rsubs:new Set(), _chan:null,
@@ -495,7 +523,7 @@ function AuthProvider({children}){
 
   const register=async(email,pass,name,ent)=>{
     if(!email||!pass||!name) throw new Error("Tous les champs sont requis.");
-    if(pass.length<6)        throw new Error("Mot de passe : 6 caractères minimum.");
+    if(pass.length<8)        throw new Error("Mot de passe : 8 caractères minimum.");
     if(!/\S+@\S+\.\S+/.test(email)) throw new Error("Email invalide.");
     if(SB_OK){
       const {data,error}=await sb().auth.signUp({ email, password:pass, options:{ data:{ name, entreprise:ent||"" } } });
@@ -545,7 +573,7 @@ function AuthProvider({children}){
 
   // Enregistre le nouveau mot de passe, puis ouvre la session.
   const definirMotDePasse=async(pass)=>{
-    if(!pass||pass.length<6) throw new Error("Mot de passe : 6 caractères minimum.");
+    if(!pass||pass.length<8) throw new Error("Mot de passe : 8 caractères minimum.");
     if(!SB_OK) throw new Error("Disponible une fois Supabase configuré.");
     const {error}=await sb().auth.updateUser({ password:pass });
     if(error) throw new Error(traduire(error));
@@ -970,7 +998,7 @@ function AuthScreen(){
     if(!email) e.email="Email requis"; else if(!/\S+@\S+\.\S+/.test(email)) e.email="Format invalide";
     // En mode « mot de passe oublié », il n'y a justement pas de mot de
     // passe à saisir : l'exiger bloquerait la seule issue de secours.
-    if(!oubli){ if(!pass) e.pass="Requis"; else if(pass.length<6) e.pass="6 caractères min."; }
+    if(!oubli){ if(!pass) e.pass="Requis"; else if(mode!=="login"&&pass.length<8) e.pass="8 caractères min."; }
     if(mode==="register"&&!name) e.name="Nom requis";
     setErrors(e); return!Object.keys(e).length;
   };
@@ -2288,7 +2316,7 @@ function ChatTab({user,plan,notify,onUpgrade}){
     }catch(e){setApiErr(e.message);saveMsgs([...next,{role:"assistant",content:`❌ Erreur : ${e.message}`}]);}
     setLoad(false);
   };
-  const fmt=t=>t.replace(/\*\*(.*?)\*\*/g,"<b>$1</b>").replace(/\*(.*?)\*/g,"<i>$1</i>").replace(/\n/g,"<br/>");
+  const fmt=t=>echapperHtml(t).replace(/\*\*(.*?)\*\*/g,"<b>$1</b>").replace(/\*(.*?)\*/g,"<i>$1</i>").replace(/\n/g,"<br/>");
   const suggestions=["Écriture OHADA pour une vente","TVA 18% Côte d'Ivoire","Calcul CNPS employé","Point mort mon entreprise","Gestion stock saisonnière"];
   return(
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
