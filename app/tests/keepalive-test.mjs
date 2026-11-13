@@ -1,0 +1,18 @@
+import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+import { bilan } from "./lib/sim.mjs";
+const racine = fileURLToPath(new URL("..", import.meta.url));
+const R = []; const t = async (n, f) => { try { await f(); R.push({ nom: n, ok: true }); } catch (e) { R.push({ nom: n, ok: false, detail: e.message.split("\n")[0] }); } };
+const h = (await import(racine + "api/keepalive.js")).default;
+const ENV = { VITE_SUPABASE_URL: "https://x.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "svc-factice", CRON_SECRET: "cron-factice-123" };
+let appels = []; let statut = 200;
+globalThis.fetch = async (u, o) => { appels.push({ u: String(u), o }); return { ok: statut < 300, status: statut, json: async () => [] }; };
+const run = async (env, auth) => { for (const k of ["VITE_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "CRON_SECRET"]) delete process.env[k]; Object.assign(process.env, env); appels = [];
+  const r = { setHeader() {}, status: (c) => ({ json: (o) => { r.code = c; r.out = o; } }) }; await h({ headers: auth ? { authorization: auth } : {} }, r); return r; };
+await t("sans CRON_SECRET configuré → 503 (jamais ouvert)", async () => { const r = await run({ ...ENV, CRON_SECRET: "" }, "Bearer x"); assert.equal(r.code, 503); assert.equal(appels.length, 0); });
+await t("sans en-tête ou avec un mauvais secret → 401, aucune requête vers la base", async () => { for (const a of [null, "Bearer faux", "Bearer cron-factice-12", "cron-factice-123x"]) { const r = await run(ENV, a); assert.equal(r.code, 401, String(a)); } assert.equal(appels.length, 0); });
+await t("bon secret → 200 et une requête minimale (limit=1) avec la clé serveur", async () => { const r = await run(ENV, "Bearer cron-factice-123"); assert.equal(r.code, 200); assert.equal(appels.length, 1); assert.ok(/organizations\?select=id&limit=1/.test(appels[0].u)); });
+await t("base en erreur → 502 (visible dans les journaux Vercel)", async () => { statut = 500; const r = await run(ENV, "Bearer cron-factice-123"); statut = 200; assert.equal(r.code, 502); });
+await t("vercel.json déclare la tâche quotidienne /api/keepalive", async () => { const c = JSON.parse(readFileSync(racine + "vercel.json", "utf8")).crons; assert.deepEqual(c.map((x) => x.path), ["/api/keepalive"]); assert.match(c[0].schedule, /^\d+ \d+ \* \* \*$/); });
+process.exit(bilan("KEEPALIVE (remplace Netlify)", R) ? 1 : 0);

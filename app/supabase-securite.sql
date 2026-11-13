@@ -136,16 +136,38 @@ security definer
 set search_path = public
 as $$
 declare
-  v_old jsonb := case when tg_op in ('UPDATE','DELETE') then to_jsonb(old) - 'image' end;
-  v_new jsonb := case when tg_op in ('INSERT','UPDATE') then to_jsonb(new) - 'image' end;
-  v_ref jsonb := coalesce(v_new, v_old);
+  v_old jsonb := case when tg_op in ('UPDATE','DELETE') then to_jsonb(old) end;
+  v_new jsonb := case when tg_op in ('INSERT','UPDATE') then to_jsonb(new) end;
+  v_ref jsonb;
   v_org uuid;
+  v_cols text[];
 begin
-  -- organizations porte son identifiant dans « id », les autres dans « org_id ».
-  v_org := coalesce((v_ref->>'org_id')::uuid,
-                    case when tg_table_name = 'organizations' then (v_ref->>'id')::uuid end);
-  insert into public.journal_audit (org_id, user_id, table_name, op, row_id, avant, apres)
-  values (v_org, auth.uid(), tg_table_name, tg_op, v_ref->>'id', v_old, v_new);
+  -- Minimisation : le journal ne doit pas devenir une seconde copie des données sensibles.
+  --   · paie, RH, profils : seulement les NOMS des colonnes modifiées (jamais les valeurs) ;
+  --   · autres tables : valeurs, sans les champs volumineux ou sensibles (image, contenu).
+  if tg_table_name in ('fiches_paie','employes','profiles') then
+    select coalesce(array_agg(k order by k), '{}') into v_cols
+      from (select key as k from jsonb_each(coalesce(v_new, v_old))
+            where tg_op <> 'UPDATE' or (v_new -> key) is distinct from (v_old -> key)) c;
+    v_ref := coalesce(v_new, v_old);
+    v_old := null;
+    v_new := jsonb_build_object('colonnes', to_jsonb(v_cols));
+  else
+    v_old := v_old - 'image' - 'content';
+    v_new := v_new - 'image' - 'content';
+    v_ref := coalesce(v_new, v_old);
+  end if;
+  
+  begin
+    -- organizations porte son identifiant dans « id », les autres dans « org_id ».
+    v_org := coalesce((v_ref->>'org_id')::uuid,
+                      case when tg_table_name = 'organizations' then (v_ref->>'id')::uuid end);
+    insert into public.journal_audit (org_id, user_id, table_name, op, row_id, avant, apres)
+    values (v_org, auth.uid(), tg_table_name, tg_op, v_ref->>'id', v_old, v_new);
+  exception when others then
+    -- Une panne du journal ne doit JAMAIS bloquer une opération métier (facture, paie…).
+    raise warning 'journal_audit: écriture impossible (%)', sqlerrm;
+  end;
   return null;   -- déclencheur AFTER : la valeur de retour est ignorée
 end;
 $$;
@@ -191,3 +213,14 @@ order by c.relrowsecurity, tablename;
 --   create policy "akili_profil" on public.profiles for all to authenticated
 --     using (id = auth.uid()) with check (id = auth.uid());
 -- Les tables et le journal_audit ne sont jamais supprimés.
+
+-- ─── Rétention du journal (À NE PLANIFIER QU'AVEC VOTRE ACCORD) ───────
+-- Cette fonction supprimerait les lignes du journal plus anciennes que N jours.
+-- Elle n'est PAS appelée automatiquement : planifier cette suppression est une
+-- décision à prendre explicitement (conservation légale à confirmer).
+-- create or replace function public.purger_journal_audit(p_jours integer default 365)
+-- returns bigint language sql security definer set search_path = public as $$
+--   with d as (delete from public.journal_audit where at < now() - make_interval(days => p_jours) returning 1)
+--   select count(*) from d $$;
+-- revoke all on function public.purger_journal_audit(integer) from public, anon, authenticated;
+-- grant execute on function public.purger_journal_audit(integer) to service_role;

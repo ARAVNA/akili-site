@@ -46,7 +46,7 @@ Consigner la date et le résultat. **Tant que ces 5 points n'ont pas été faits
 Ordre validé en simulation (c'est l'ordre qui compte : le dump charge les données **avant** de créer les déclencheurs, sinon le déclencheur d'inscription fabrique des entreprises vides et le journal d'audit se duplique) :
 1. Projet vierge. Exécuter `akili_auth_AAAA-MM-JJ.sql` (comptes).
 2. `pg_restore --no-owner --schema=public -d "$DB_URL_NOUVEAU" akili_public_AAAA-MM-JJ.dump` (si `public` existe déjà et fait échouer l'import : ajouter `--clean --if-exists` **uniquement sur ce projet vierge**).
-3. **Rejouer `supabase-schema.sql`, `supabase-securite.sql` puis `supabase-paiements.sql`** : ils recréent le déclencheur d'inscription et **referment les droits**. Obligatoire, car un dump `--no-privileges` ne conserve pas les REVOKE (constaté : TRUNCATE et accès anonyme réapparaissent).
+3. **Rejouer `supabase-schema.sql`, `supabase-securite.sql`, `supabase-paiements.sql` puis `supabase-integrite.sql`** (la phase 2 de l'intégrité fait déjà partie du dump) : ils recréent le déclencheur d'inscription et **referment les droits**. Obligatoire, car un dump `--no-privileges` ne conserve pas les REVOKE (constaté : TRUNCATE et accès anonyme réapparaissent).
 4. Vérifier (section 2, points 3 à 5). Seulement ensuite : pointer `VITE_SUPABASE_URL` et la clé publique vers le nouveau projet et redéployer.
 
 ## 4. Retour arrière

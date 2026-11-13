@@ -29,3 +29,7 @@ Installation (sans modifier package.json) :
 - `supabase-diagnostic-lecture-seule.sql` (à la racine de app/) — SELECT seulement, à lancer sur la vraie base avant migration
 
 Ces tests simulent Supabase ; ils ne remplacent pas une vérification sur le vrai projet.
+- `node tests/paiements-test.mjs` — paiements (faux prestataire, signature, rejeu, droits), base simulée
+- `node tests/integrite-test.mjs` — clé (org_id, id) en 2 phases, journal d'audit minimal et non bloquant
+- `node tests/garde-fous-test.mjs` — garde-fous de build (secrets, mode démo)
+- `node tests/keepalive-test.mjs` — route de maintien en éveil

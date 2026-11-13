@@ -15,6 +15,15 @@ await t("echapperHtml neutralise <script>/<img onerror>", () => {
   assert.equal(e(null), '');
 });
 
+await t("déconnexion : les copies locales (compta, paie, chat) sont effacées, hors données étrangères à AKILI", () => {
+  const mem = new Map(); const ls = {}; for (const [k, f] of Object.entries({ getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, String(v)), removeItem: (k) => mem.delete(k) })) Object.defineProperty(ls, k, { value: f, enumerable: false });
+  Object.keys = ((orig) => (o) => (o === ls ? [...mem.keys()] : orig(o)))(Object.keys);
+  globalThis.localStorage = ls; globalThis.sessionStorage = ls;
+  mem.set("akili_fiches_paie_org1", "[{\"net\":500000}]"); mem.set("akili_chat_org1", "[]"); mem.set("akili_s", "{}"); mem.set("autre_site", "garde");
+  mod.Store.purgerLocal();
+  assert.deepEqual([...mem.keys()], ["autre_site"]);
+});
+
 // ── 2. /api/ia avec fetch simulé ──
 const ENV = { VITE_SUPABASE_URL:"https://x.supabase.co", ANTHROPIC_API_KEY:"test-key-factice", SUPABASE_SERVICE_ROLE_KEY:"svc-factice" };
 async function appeler({ env = ENV, body = {messages:[{role:"user",content:"Bonjour"}]}, auth = "Bearer jeton", method="POST", sb = {} }) {

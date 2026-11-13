@@ -299,7 +299,7 @@ export const Store = {
     try{
       const c=sb();
       if(aInserer.length){ const {error}=await c.from(s.table).insert(aInserer); if(error) throw error; }
-      if(aMajour.length){ const {error}=await c.from(s.table).upsert(aMajour,{onConflict:"id"}); if(error) throw error; }
+      if(aMajour.length){ const {error}=await c.from(s.table).upsert(aMajour,{onConflict:(s.table==="documents"||s.table==="achats")?"org_id,id":"id"}); if(error) throw error; }
       if(aSupprimer.length){ const {error}=await c.from(s.table).delete().in("id",aSupprimer); if(error) throw error; }
     }catch(e){
       console.warn("Supabase",s.table,e?.message);
@@ -382,6 +382,12 @@ export const Store = {
     Store._scope=null;
   },
   async clear(){ await Store.unbind(); Store._c.clear(); Store._file.clear(); },
+  // Déconnexion en mode connecté : les copies locales (compta, paie, chat…) ne doivent pas
+  // rester lisibles sur l'appareil. Les données restent en base et reviennent à la reconnexion.
+  purgerLocal(){
+    try{ Object.keys(localStorage).filter(k=>k.startsWith("akili_")).forEach(k=>localStorage.removeItem(k)); }catch{}
+    try{ sessionStorage.removeItem("akili_s"); }catch{}
+  },
 
   subscribe(cb){ Store._subs.add(cb); return ()=>Store._subs.delete(cb); },
   subscribeRemote(cb){ Store._rsubs.add(cb); return ()=>Store._rsubs.delete(cb); },
@@ -604,7 +610,7 @@ function AuthProvider({children}){
 
   const logout=async()=>{
     await Store.clear();
-    if(SB_OK){ try{ await sb().auth.signOut(); }catch{} setUser(null); }
+    if(SB_OK){ try{ await sb().auth.signOut(); }catch{} Store.purgerLocal(); setUser(null); }
     else saveLocal(null);
   };
 
