@@ -69,4 +69,25 @@ await r3.exec(scripts[1]);                          // supabase-securite.sql
 if(process.env.DBG){const a=(sourcePrivs).split(","),b=(await privs(r3)).split(",");console.log("DBG3 diff",a.filter(x=>!b.includes(x)).slice(0,6),b.filter(x=>!a.includes(x)).slice(0,6));}
 t("…et le rejeu de supabase-securite.sql après restauration referme ces droits", (await privs(r3)) === sourcePrivs, "");
 t("restauration n°3 : données identiques après rejeu de la sécurité", JSON.stringify(await etat(r3)) === JSON.stringify(sourceEtat) || true, "");
+
+// ── RESTAURATION n°4 : ordre recommandé (comptes → dump complet public → rejeu des scripts) ──
+const fFull = await pgDump({ pg: prod, args: ["--schema=public", "--inserts", "--no-owner", "--no-privileges"] });
+const sqlFull = (await fFull.text()).replace(/^CREATE SCHEMA public;$/m, "");
+const r4 = await creerBase({ scripts: [] });                       // projet vierge : aucun déclencheur sur auth.users
+await r4.exec(`drop schema public cascade; create schema public; grant usage on schema public to anon, authenticated, service_role;
+  alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
+  alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
+  alter default privileges in schema public grant execute on functions to anon, authenticated, service_role;`);
+await r4.exec(insUsers);                                           // 1. comptes
+await r4.exec(sqlFull);                                            // 2. dump complet (données chargées avant les déclencheurs)
+await r4.exec(`reset row_security; reset search_path;`);
+const avantRejeu = JSON.stringify(await etat(r4));
+for (const sc of scripts) await r4.exec(sc);                       // 3. rejeu : déclencheur d'inscription + droits
+t("ordre recommandé : après dump complet, les tables sont identiques à la production", avantRejeu === JSON.stringify(sourceEtat), "");
+t("ordre recommandé : le rejeu des scripts ne change aucune donnée (pas de doublon d'entreprise ni de journal)", JSON.stringify(await etat(r4)) === JSON.stringify(sourceEtat), "");
+t("ordre recommandé : droits identiques à la production après rejeu", (await privs(r4)) === sourcePrivs, "");
+rr = await comme(r4, "authenticated", IDS.B1, `select org_id from public.clients`);
+t("ordre recommandé : B1 ne voit que son entreprise", rr.ok && rr.rows.length >= 1 && rr.rows.every((x) => x.org_id === orgB), "");
+rr = await comme(r4, "authenticated", IDS.A2, `select 1 from public.journal_audit where org_id='${orgB}'`);
+t("ordre recommandé : A2 ne lit pas le journal d'audit de B", rr.ok && rr.rows.length === 0, "");
 process.exit(bilan("EXERCICE DE RESTAURATION (SIMULÉ)", R) ? 1 : 0);

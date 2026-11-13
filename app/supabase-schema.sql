@@ -7,12 +7,21 @@
 -- Après ce script, exécuter supabase-securite.sql (journal d'audit,
 -- incrément atomique des quotas, verrouillage des fonctions).
 --
--- CE SCRIPT NE DÉTRUIT RIEN. Il ne fait qu'ajouter ce qui manque :
--- tout est en CREATE IF NOT EXISTS ou ADD COLUMN IF NOT EXISTS.
--- Vous pouvez le relancer sans risque.
+-- CE SCRIPT NE SUPPRIME AUCUNE DONNÉE : pas de DROP TABLE, DELETE, TRUNCATE
+-- ni de modification de lignes existantes. Il ajoute tables, colonnes,
+-- index, politiques et droits. Il MODIFIE pourtant des réglages :
+--   · supprime puis recrée la politique « akili_org » (et les anciennes
+--     politiques « akili_profil » de profiles) ;
+--   · RETIRE des droits (anon, TRUNCATE…) sur les tables d'AKILI ;
+--   · remplace le déclencheur on_auth_user_created.
+-- Il est exécuté dans UNE transaction : en cas d'erreur, rien n'est
+-- appliqué. Avant de le lancer sur la vraie base : sauvegarde, puis
+-- supabase-diagnostic-lecture-seule.sql (aucune écriture).
 --
 -- Où l'exécuter : SQL Editor → coller → Run (ou Ctrl+Entrée)
 -- ═══════════════════════════════════════════════════════════════════
+
+begin;
 
 -- ─── 1. LES FONDATIONS QUI MANQUENT ───────────────────────────────
 -- Toutes vos tables portent org_id, mais rien ne dit à quelle
@@ -348,10 +357,16 @@ begin
     select id, email, raw_user_meta_data from auth.users
     where id not in (select id from public.profiles)
   loop
-    insert into public.organizations (nom)
-    values (coalesce(u.raw_user_meta_data->>'entreprise',
+    -- L'ancienne version de l'application rangeait les données avec
+    -- org_id = identifiant de l'utilisateur. En donnant à son entreprise ce
+    -- même identifiant, ses données existantes restent visibles (sinon elles
+    -- ne seraient plus rattachées à aucune entreprise). Aucune ligne modifiée.
+    insert into public.organizations (id, nom)
+    values (u.id, coalesce(u.raw_user_meta_data->>'entreprise',
                      split_part(u.email,'@',1)))
+    on conflict (id) do nothing
     returning id into nouvelle_org;
+    if nouvelle_org is null then nouvelle_org := u.id; end if;
 
     insert into public.profiles (id, org_id, nom, email)
     values (u.id, nouvelle_org,
@@ -360,6 +375,8 @@ begin
   end loop;
 end $$;
 
+
+commit;
 
 -- ═══════════════════════════════════════════════════════════════════
 -- VÉRIFICATION — relancez ceci après coup, connecté dans l'application

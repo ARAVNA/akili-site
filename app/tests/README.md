@@ -24,6 +24,8 @@ Installation (sans modifier package.json) :
 - `node tests/replay.mjs` — rejouabilité des SQL, aucune perte de données
 - `node tests/documents-db-test.mjs` — isolation des documents, collisions d'id
 - `node tests/api-xss-test.mjs` — XSS (Chrome), API IA, CSV
-- `node tests/restore-drill.mjs` — sauvegarde/restauration simulée (pg_dump)
+- `node tests/restore-drill.mjs` — sauvegarde/restauration simulée (pg_dump), 4 scénarios dont l'ordre recommandé
+- `node tests/legacy-orgid-test.mjs` — anciennes données (org_id = identifiant du compte) restent visibles et intactes
+- `supabase-diagnostic-lecture-seule.sql` (à la racine de app/) — SELECT seulement, à lancer sur la vraie base avant migration
 
 Ces tests simulent Supabase ; ils ne remplacent pas une vérification sur le vrai projet.

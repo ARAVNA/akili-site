@@ -176,9 +176,18 @@ join pg_namespace n on n.oid = c.relnamespace and n.nspname = t.schemaname
 where t.schemaname = 'public'
 order by c.relrowsecurity, tablename;
 
--- ─── ROLLBACK (à n'utiliser qu'en cas de besoin, en le décommentant) ──
--- drop trigger if exists akili_audit on public.<table>;   -- pour chaque table
--- drop function if exists public.journaliser();
--- drop function if exists public.incrementer_quota_ia(uuid, text);
--- grant insert, update, delete on public.profiles, public.organizations, public.ai_quotas to authenticated;
--- (puis rejouer supabase-schema.sql pour retrouver les anciennes règles)
+-- ─── ROLLBACK (urgence seulement — décommenter, exécuter) ──────────
+-- ATTENTION : revenir en arrière RÉINTRODUIT les failles (changement d'org_id,
+-- de plan, de quota). À n'utiliser que si l'application est bloquée et pour
+-- le temps de corriger. Rejouer supabase-schema.sql NE restaure PAS l'ancien
+-- état (il est sûr par défaut) : il faut les ordres ci-dessous.
+--
+-- 1) Retirer l'audit (sans supprimer le journal) :
+--   drop trigger if exists akili_audit on public.<table>;   -- pour chacune des 11 tables
+-- 2) Rendre les anciens droits d'écriture :
+--   grant insert, update, delete on public.profiles, public.organizations, public.ai_quotas to authenticated;
+-- 3) Rendre l'ancienne politique de profil :
+--   drop policy if exists "akili_profil_maj" on public.profiles;
+--   create policy "akili_profil" on public.profiles for all to authenticated
+--     using (id = auth.uid()) with check (id = auth.uid());
+-- Les tables et le journal_audit ne sont jamais supprimés.
